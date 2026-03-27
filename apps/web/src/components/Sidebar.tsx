@@ -206,6 +206,14 @@ function T3Wordmark() {
   );
 }
 
+function T3Monogram({ className }: { className?: string }) {
+  return (
+    <span className={`font-semibold text-sm tracking-tight text-foreground ${className ?? ""}`}>
+      T3
+    </span>
+  );
+}
+
 function DesktopSidebarToggleButton({
   ariaLabel,
   className,
@@ -1662,58 +1670,74 @@ export default function Sidebar() {
           <Tooltip>
             <TooltipTrigger
               render={
-                <DesktopSidebarToggleButton
-                  ariaLabel="Expand sidebar"
-                  className="text-foreground"
+                <button
+                  type="button"
+                  aria-label="Expand sidebar"
+                  className="group inline-flex size-8 items-center justify-center rounded-md text-foreground hover:bg-accent"
                   onClick={toggleSidebar}
-                />
+                >
+                  <span className="flex items-center justify-center group-hover:hidden">
+                    <T3Monogram />
+                  </span>
+                  <PanelLeftIcon className="hidden size-3.5 group-hover:block" />
+                </button>
               }
             />
             <TooltipPopup side="right">Expand sidebar</TooltipPopup>
           </Tooltip>
         </SidebarHeader>
       ) : isElectron ? (
-        <SidebarHeader className="drag-region flex h-[52px] items-center justify-between px-2 py-0">
-          <div className="min-w-0">{wordmark}</div>
-          <div className="flex items-center gap-1">
-            {showDesktopUpdateButton ? (
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <button
-                      type="button"
-                      aria-label={desktopUpdateTooltip}
-                      aria-disabled={desktopUpdateButtonDisabled || undefined}
-                      disabled={desktopUpdateButtonDisabled}
-                      className={`drag-region-no-drag inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors ${desktopUpdateButtonInteractivityClasses} ${desktopUpdateButtonClasses}`}
-                      onClick={handleDesktopUpdateButtonClick}
-                    >
-                      <RocketIcon className="size-3.5" />
-                    </button>
-                  }
-                />
-                <TooltipPopup side="bottom">{desktopUpdateTooltip}</TooltipPopup>
-              </Tooltip>
-            ) : null}
-            <DesktopSidebarToggleButton
-              ariaLabel="Collapse sidebar"
-              className="drag-region-no-drag hidden md:inline-flex"
-              onClick={toggleSidebar}
-            />
-            <SidebarTrigger className="drag-region-no-drag shrink-0 md:hidden" />
+        <SidebarHeader className="drag-region px-2 py-2">
+          <div className="flex items-center justify-between">
+            <div className="inline-flex size-8 items-center justify-center rounded-md text-foreground">
+              <T3Monogram />
+            </div>
+            <div className="flex items-center gap-1">
+              {showDesktopUpdateButton ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        aria-label={desktopUpdateTooltip}
+                        aria-disabled={desktopUpdateButtonDisabled || undefined}
+                        disabled={desktopUpdateButtonDisabled}
+                        className={`drag-region-no-drag inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors ${desktopUpdateButtonInteractivityClasses} ${desktopUpdateButtonClasses}`}
+                        onClick={handleDesktopUpdateButtonClick}
+                      >
+                        <RocketIcon className="size-3.5" />
+                      </button>
+                    }
+                  />
+                  <TooltipPopup side="bottom">{desktopUpdateTooltip}</TooltipPopup>
+                </Tooltip>
+              ) : null}
+              <DesktopSidebarToggleButton
+                ariaLabel="Collapse sidebar"
+                className="drag-region-no-drag hidden md:inline-flex"
+                onClick={toggleSidebar}
+              />
+              <SidebarTrigger className="drag-region-no-drag shrink-0 md:hidden" />
+            </div>
           </div>
+          <div className="mt-1 min-w-0">{wordmark}</div>
         </SidebarHeader>
       ) : (
-        <SidebarHeader className="flex items-center justify-between px-2 py-2 sm:py-3">
-          <div className="min-w-0">{wordmark}</div>
-          <div className="flex items-center justify-end">
-            <DesktopSidebarToggleButton
-              ariaLabel="Collapse sidebar"
-              className="hidden md:inline-flex"
-              onClick={toggleSidebar}
-            />
-            <SidebarTrigger className="shrink-0 md:hidden" />
+        <SidebarHeader className="px-2 py-2 sm:py-3">
+          <div className="flex items-center justify-between">
+            <div className="inline-flex size-8 items-center justify-center rounded-md text-foreground">
+              <T3Monogram />
+            </div>
+            <div className="flex items-center justify-end">
+              <DesktopSidebarToggleButton
+                ariaLabel="Collapse sidebar"
+                className="hidden md:inline-flex"
+                onClick={toggleSidebar}
+              />
+              <SidebarTrigger className="shrink-0 md:hidden" />
+            </div>
           </div>
+          <div className="mt-1 min-w-0">{wordmark}</div>
         </SidebarHeader>
       )}
 
