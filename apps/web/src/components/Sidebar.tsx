@@ -1646,7 +1646,7 @@ export default function Sidebar() {
     <Tooltip>
       <TooltipTrigger
         render={
-          <div className="flex min-w-0 items-center gap-1.5">
+          <div className="flex min-w-0 items-center gap-1.5 px-2">
             <T3Wordmark />
             <span className="truncate text-sm font-medium tracking-tight text-muted-foreground">
               Code
@@ -1687,57 +1687,47 @@ export default function Sidebar() {
           </Tooltip>
         </SidebarHeader>
       ) : isElectron ? (
-        <SidebarHeader className="drag-region px-2 py-2">
-          <div className="flex items-center justify-between">
-            <div className="inline-flex size-8 items-center justify-center rounded-md text-foreground">
-              <T3Monogram />
-            </div>
-            <div className="flex items-center gap-1">
-              {showDesktopUpdateButton ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <button
-                        type="button"
-                        aria-label={desktopUpdateTooltip}
-                        aria-disabled={desktopUpdateButtonDisabled || undefined}
-                        disabled={desktopUpdateButtonDisabled}
-                        className={`drag-region-no-drag inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors ${desktopUpdateButtonInteractivityClasses} ${desktopUpdateButtonClasses}`}
-                        onClick={handleDesktopUpdateButtonClick}
-                      >
-                        <RocketIcon className="size-3.5" />
-                      </button>
-                    }
-                  />
-                  <TooltipPopup side="bottom">{desktopUpdateTooltip}</TooltipPopup>
-                </Tooltip>
-              ) : null}
-              <DesktopSidebarToggleButton
-                ariaLabel="Collapse sidebar"
-                className="drag-region-no-drag hidden md:inline-flex"
-                onClick={toggleSidebar}
-              />
-              <SidebarTrigger className="drag-region-no-drag shrink-0 md:hidden" />
-            </div>
+        <SidebarHeader className="drag-region flex-row items-center justify-between gap-2 px-2 py-2">
+          <div className="min-w-0">{wordmark}</div>
+          <div className="flex items-center gap-1">
+            {showDesktopUpdateButton ? (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label={desktopUpdateTooltip}
+                      aria-disabled={desktopUpdateButtonDisabled || undefined}
+                      disabled={desktopUpdateButtonDisabled}
+                      className={`drag-region-no-drag inline-flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors ${desktopUpdateButtonInteractivityClasses} ${desktopUpdateButtonClasses}`}
+                      onClick={handleDesktopUpdateButtonClick}
+                    >
+                      <RocketIcon className="size-3.5" />
+                    </button>
+                  }
+                />
+                <TooltipPopup side="bottom">{desktopUpdateTooltip}</TooltipPopup>
+              </Tooltip>
+            ) : null}
+            <DesktopSidebarToggleButton
+              ariaLabel="Collapse sidebar"
+              className="drag-region-no-drag hidden md:inline-flex"
+              onClick={toggleSidebar}
+            />
+            <SidebarTrigger className="drag-region-no-drag shrink-0 md:hidden" />
           </div>
-          <div className="mt-1 min-w-0">{wordmark}</div>
         </SidebarHeader>
       ) : (
-        <SidebarHeader className="px-2 py-2 sm:py-3">
-          <div className="flex items-center justify-between">
-            <div className="inline-flex size-8 items-center justify-center rounded-md text-foreground">
-              <T3Monogram />
-            </div>
-            <div className="flex items-center justify-end">
-              <DesktopSidebarToggleButton
-                ariaLabel="Collapse sidebar"
-                className="hidden md:inline-flex"
-                onClick={toggleSidebar}
-              />
-              <SidebarTrigger className="shrink-0 md:hidden" />
-            </div>
+        <SidebarHeader className="flex-row items-center justify-between gap-2 px-2 py-2 sm:py-3">
+          <div className="min-w-0">{wordmark}</div>
+          <div className="flex items-center justify-end">
+            <DesktopSidebarToggleButton
+              ariaLabel="Collapse sidebar"
+              className="hidden md:inline-flex"
+              onClick={toggleSidebar}
+            />
+            <SidebarTrigger className="shrink-0 md:hidden" />
           </div>
-          <div className="mt-1 min-w-0">{wordmark}</div>
         </SidebarHeader>
       )}
 
