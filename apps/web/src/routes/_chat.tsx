@@ -117,7 +117,7 @@ function ChatRouteLayout() {
       <ChatRouteGlobalShortcuts />
       <Sidebar
         side="left"
-        collapsible="offcanvas"
+        collapsible="icon"
         className="border-r border-border bg-card text-foreground"
         resizable={{
           minWidth: THREAD_SIDEBAR_MIN_WIDTH,
