@@ -597,6 +597,67 @@ export function validateExtensionDraft(
   });
 }
 
+export function validateInstalledExtension(
+  config: Pick<ServerConfigShape, "cwd" | "extensionInstalledDir">,
+  input: ExtensionValidateDraftInput,
+): Effect.Effect<
+  ExtensionPatchValidationResult,
+  ExtensionRegistryError,
+  FileSystem.FileSystem | Path.Path
+> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const pathService = yield* Path.Path;
+    const extensionId = input.extensionId;
+    const { installedDir } = yield* resolveInstalledPaths(config, extensionId);
+    const manifestPath = pathService.join(installedDir, "manifest.json");
+    const patchPath = pathService.join(installedDir, "patches", "app.patch");
+    const installedExists = yield* fs.exists(installedDir).pipe(Effect.orElseSucceed(() => false));
+    if (!installedExists) {
+      return yield* registryError({
+        path: installedDir,
+        detail: "installed extension does not exist",
+      });
+    }
+    yield* readManifest(manifestPath);
+    const patchExists = yield* fs.exists(patchPath).pipe(Effect.orElseSucceed(() => false));
+    if (!patchExists) {
+      return yield* registryError({
+        path: patchPath,
+        detail: "installed extension does not include patches/app.patch",
+      });
+    }
+    const repositoryRoot = yield* resolveGitRoot(config);
+    const result = yield* Effect.tryPromise({
+      try: () =>
+        runProcess("git", ["-c", "core.longpaths=true", "apply", "--check", patchPath], {
+          cwd: repositoryRoot,
+          allowNonZeroExit: true,
+          outputMode: "truncate",
+          maxBufferBytes: 64 * 1024,
+          timeoutMs: 15_000,
+        }),
+      catch: (cause) =>
+        registryError({
+          path: patchPath,
+          detail: "failed to run installed extension validation",
+          cause,
+        }),
+    });
+    const detail =
+      result.code === 0
+        ? "Installed patch still applies cleanly."
+        : result.stderr.trim() || result.stdout.trim() || "Installed patch no longer applies.";
+    return {
+      extensionId,
+      patchPath,
+      valid: result.code === 0,
+      detail,
+      checkedAt: DateTime.formatIso(yield* DateTime.now),
+    };
+  });
+}
+
 export function createExtensionPreviewVariant(
   config: Pick<ServerConfigShape, "cwd" | "extensionDraftsDir" | "extensionVariantsDir">,
   input: ExtensionCreatePreviewVariantInput,
@@ -790,6 +851,33 @@ export function installExtensionPreviewVariant(
       contents: `${encodedInstallMetadata}\n`,
     });
 
+    return yield* listExtensions(config);
+  });
+}
+
+export function uninstallExtension(
+  config: Pick<
+    ServerConfigShape,
+    "extensionDraftsDir" | "extensionInstalledDir" | "extensionVariantsDir"
+  >,
+  input: ExtensionValidateDraftInput,
+): Effect.Effect<ExtensionRegistry, ExtensionRegistryError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const { installedDir } = yield* resolveInstalledPaths(config, input.extensionId);
+    const installedExists = yield* fs.exists(installedDir).pipe(Effect.orElseSucceed(() => false));
+    if (!installedExists) {
+      return yield* listExtensions(config);
+    }
+    yield* fs.remove(installedDir, { recursive: true, force: true }).pipe(
+      Effect.mapError((cause) =>
+        registryError({
+          path: installedDir,
+          detail: "failed to uninstall extension",
+          cause,
+        }),
+      ),
+    );
     return yield* listExtensions(config);
   });
 }

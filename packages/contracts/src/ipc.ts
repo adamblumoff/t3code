@@ -489,12 +489,16 @@ export interface LocalApi {
     validateExtensionDraft: (
       input: ExtensionValidateDraftInput,
     ) => Promise<ExtensionPatchValidationResult>;
+    validateInstalledExtension: (
+      input: ExtensionValidateDraftInput,
+    ) => Promise<ExtensionPatchValidationResult>;
     createExtensionPreviewVariant: (
       input: ExtensionCreatePreviewVariantInput,
     ) => Promise<ExtensionPreviewVariantEntry>;
     installExtensionPreviewVariant: (
       input: ExtensionInstallPreviewVariantInput,
     ) => Promise<ExtensionRegistry>;
+    uninstallExtension: (input: ExtensionValidateDraftInput) => Promise<ExtensionRegistry>;
   };
 }
 

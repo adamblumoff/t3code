@@ -138,12 +138,16 @@ export interface WsRpcClient {
     readonly listExtensions: RpcUnaryNoArgMethod<typeof WS_METHODS.serverListExtensions>;
     readonly createExtensionDraft: RpcUnaryMethod<typeof WS_METHODS.serverCreateExtensionDraft>;
     readonly validateExtensionDraft: RpcUnaryMethod<typeof WS_METHODS.serverValidateExtensionDraft>;
+    readonly validateInstalledExtension: RpcUnaryMethod<
+      typeof WS_METHODS.serverValidateInstalledExtension
+    >;
     readonly createExtensionPreviewVariant: RpcUnaryMethod<
       typeof WS_METHODS.serverCreateExtensionPreviewVariant
     >;
     readonly installExtensionPreviewVariant: RpcUnaryMethod<
       typeof WS_METHODS.serverInstallExtensionPreviewVariant
     >;
+    readonly uninstallExtension: RpcUnaryMethod<typeof WS_METHODS.serverUninstallExtension>;
     readonly subscribeConfig: RpcStreamMethod<typeof WS_METHODS.subscribeServerConfig>;
     readonly subscribeLifecycle: RpcStreamMethod<typeof WS_METHODS.subscribeServerLifecycle>;
     readonly subscribeAuthAccess: RpcStreamMethod<typeof WS_METHODS.subscribeAuthAccess>;
@@ -280,6 +284,8 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.serverCreateExtensionDraft](input)),
       validateExtensionDraft: (input) =>
         transport.request((client) => client[WS_METHODS.serverValidateExtensionDraft](input)),
+      validateInstalledExtension: (input) =>
+        transport.request((client) => client[WS_METHODS.serverValidateInstalledExtension](input)),
       createExtensionPreviewVariant: (input) =>
         transport.request((client) =>
           client[WS_METHODS.serverCreateExtensionPreviewVariant](input),
@@ -288,6 +294,8 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) =>
           client[WS_METHODS.serverInstallExtensionPreviewVariant](input),
         ),
+      uninstallExtension: (input) =>
+        transport.request((client) => client[WS_METHODS.serverUninstallExtension](input)),
       subscribeConfig: (listener, options) =>
         transport.subscribe((client) => client[WS_METHODS.subscribeServerConfig]({}), listener, {
           ...options,

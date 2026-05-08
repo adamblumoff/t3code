@@ -171,6 +171,10 @@ function createBrowserLocalApi(rpcClient?: WsRpcClient): LocalApi {
         rpcClient
           ? rpcClient.server.validateExtensionDraft(input)
           : Promise.reject(unavailableLocalBackendError()),
+      validateInstalledExtension: (input) =>
+        rpcClient
+          ? rpcClient.server.validateInstalledExtension(input)
+          : Promise.reject(unavailableLocalBackendError()),
       createExtensionPreviewVariant: (input) =>
         rpcClient
           ? rpcClient.server.createExtensionPreviewVariant(input)
@@ -178,6 +182,10 @@ function createBrowserLocalApi(rpcClient?: WsRpcClient): LocalApi {
       installExtensionPreviewVariant: (input) =>
         rpcClient
           ? rpcClient.server.installExtensionPreviewVariant(input)
+          : Promise.reject(unavailableLocalBackendError()),
+      uninstallExtension: (input) =>
+        rpcClient
+          ? rpcClient.server.uninstallExtension(input)
           : Promise.reject(unavailableLocalBackendError()),
     },
   };

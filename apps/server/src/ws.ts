@@ -58,7 +58,9 @@ import {
   createExtensionPreviewVariant,
   installExtensionPreviewVariant,
   listExtensions,
+  uninstallExtension,
   validateExtensionDraft,
+  validateInstalledExtension,
 } from "./extensions.ts";
 import { TerminalManager } from "./terminal/Services/Manager.ts";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries.ts";
@@ -902,6 +904,14 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               "rpc.aggregate": "server",
             },
           ),
+        [WS_METHODS.serverValidateInstalledExtension]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverValidateInstalledExtension,
+            validateInstalledExtension(config, input),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
         [WS_METHODS.serverCreateExtensionPreviewVariant]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverCreateExtensionPreviewVariant,
@@ -918,6 +928,10 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
               "rpc.aggregate": "server",
             },
           ),
+        [WS_METHODS.serverUninstallExtension]: (input) =>
+          observeRpcEffect(WS_METHODS.serverUninstallExtension, uninstallExtension(config, input), {
+            "rpc.aggregate": "server",
+          }),
         [WS_METHODS.sourceControlLookupRepository]: (input) =>
           observeRpcEffect(
             WS_METHODS.sourceControlLookupRepository,

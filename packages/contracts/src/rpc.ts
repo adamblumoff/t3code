@@ -159,8 +159,10 @@ export const WS_METHODS = {
   serverListExtensions: "server.listExtensions",
   serverCreateExtensionDraft: "server.createExtensionDraft",
   serverValidateExtensionDraft: "server.validateExtensionDraft",
+  serverValidateInstalledExtension: "server.validateInstalledExtension",
   serverCreateExtensionPreviewVariant: "server.createExtensionPreviewVariant",
   serverInstallExtensionPreviewVariant: "server.installExtensionPreviewVariant",
+  serverUninstallExtension: "server.uninstallExtension",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -262,6 +264,15 @@ export const WsServerValidateExtensionDraftRpc = Rpc.make(WS_METHODS.serverValid
   error: ExtensionRegistryError,
 });
 
+export const WsServerValidateInstalledExtensionRpc = Rpc.make(
+  WS_METHODS.serverValidateInstalledExtension,
+  {
+    payload: ExtensionValidateDraftInput,
+    success: ExtensionPatchValidationResult,
+    error: ExtensionRegistryError,
+  },
+);
+
 export const WsServerCreateExtensionPreviewVariantRpc = Rpc.make(
   WS_METHODS.serverCreateExtensionPreviewVariant,
   {
@@ -279,6 +290,12 @@ export const WsServerInstallExtensionPreviewVariantRpc = Rpc.make(
     error: ExtensionRegistryError,
   },
 );
+
+export const WsServerUninstallExtensionRpc = Rpc.make(WS_METHODS.serverUninstallExtension, {
+  payload: ExtensionValidateDraftInput,
+  success: ExtensionRegistry,
+  error: ExtensionRegistryError,
+});
 
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
   WS_METHODS.sourceControlLookupRepository,
@@ -518,8 +535,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerListExtensionsRpc,
   WsServerCreateExtensionDraftRpc,
   WsServerValidateExtensionDraftRpc,
+  WsServerValidateInstalledExtensionRpc,
   WsServerCreateExtensionPreviewVariantRpc,
   WsServerInstallExtensionPreviewVariantRpc,
+  WsServerUninstallExtensionRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,

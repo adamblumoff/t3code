@@ -7,6 +7,7 @@ import {
   PlusIcon,
   RefreshCwIcon,
   ShieldCheckIcon,
+  Trash2Icon,
   WrenchIcon,
 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -43,16 +44,20 @@ function ExtensionRow({
   preview,
   validating,
   creatingPreview,
+  uninstalling,
   onValidate,
   onCreatePreview,
+  onUninstall,
 }: {
   entry: ExtensionRegistryEntry;
   validation?: ExtensionPatchValidationResult;
   preview?: ExtensionPreviewVariantEntry;
   validating?: boolean;
   creatingPreview?: boolean;
+  uninstalling?: boolean;
   onValidate?: () => void;
   onCreatePreview?: () => void;
+  onUninstall?: () => void;
 }) {
   const baseBuild = entry.manifest.generatedAgainst;
   const baseLabel = [baseBuild?.channel, baseBuild?.version, baseBuild?.gitCommit]
@@ -88,18 +93,20 @@ function ExtensionRow({
         </span>
       }
       control={
-        onValidate ? (
+        onValidate || onUninstall ? (
           <span className="inline-flex items-center gap-1.5">
-            <Button size="xs" variant="outline" disabled={validating} onClick={onValidate}>
-              {validation?.valid ? (
-                <CheckCircleIcon className="size-3.5 text-success" />
-              ) : validation ? (
-                <CircleAlertIcon className="size-3.5 text-destructive" />
-              ) : (
-                <ShieldCheckIcon className="size-3.5" />
-              )}
-              {validating ? "Checking" : validation ? "Recheck" : "Validate"}
-            </Button>
+            {onValidate ? (
+              <Button size="xs" variant="outline" disabled={validating} onClick={onValidate}>
+                {validation?.valid ? (
+                  <CheckCircleIcon className="size-3.5 text-success" />
+                ) : validation ? (
+                  <CircleAlertIcon className="size-3.5 text-destructive" />
+                ) : (
+                  <ShieldCheckIcon className="size-3.5" />
+                )}
+                {validating ? "Checking" : validation ? "Recheck" : "Validate"}
+              </Button>
+            ) : null}
             {onCreatePreview ? (
               <Button
                 size="xs"
@@ -109,6 +116,12 @@ function ExtensionRow({
               >
                 <EyeIcon className="size-3.5" />
                 {creatingPreview ? "Creating" : preview ? "Recreate" : "Preview"}
+              </Button>
+            ) : null}
+            {onUninstall ? (
+              <Button size="xs" variant="outline" disabled={uninstalling} onClick={onUninstall}>
+                <Trash2Icon className="size-3.5" />
+                {uninstalling ? "Removing" : "Uninstall"}
               </Button>
             ) : null}
           </span>
@@ -224,6 +237,31 @@ export function ExtensionsSettingsPanel() {
       });
     },
   });
+  const validateInstalledMutation = useMutation({
+    mutationFn: (entry: ExtensionRegistryEntry) =>
+      ensureLocalApi().server.validateInstalledExtension({
+        extensionId: entry.manifest.id,
+      }),
+    onSuccess: (result) => {
+      setValidationByExtensionId((current) => ({
+        ...current,
+        [result.extensionId]: result,
+      }));
+      toastManager.add({
+        title: result.valid ? "Installed patch applies" : "Installed patch conflict",
+        description: result.detail,
+        type: result.valid ? "success" : "warning",
+      });
+    },
+    onError: (error) => {
+      toastManager.add({
+        title: "Unable to recheck installed extension",
+        description:
+          error instanceof Error ? error.message : "The installed extension was not checked.",
+        type: "error",
+      });
+    },
+  });
   const createPreviewMutation = useMutation({
     mutationFn: (entry: ExtensionRegistryEntry) =>
       ensureLocalApi().server.createExtensionPreviewVariant({
@@ -275,6 +313,32 @@ export function ExtensionsSettingsPanel() {
         title: "Unable to install extension",
         description:
           error instanceof Error ? error.message : "The extension preview was not installed.",
+        type: "error",
+      });
+    },
+  });
+  const uninstallMutation = useMutation({
+    mutationFn: (entry: ExtensionRegistryEntry) =>
+      ensureLocalApi().server.uninstallExtension({
+        extensionId: entry.manifest.id,
+      }),
+    onSuccess: (registry, entry) => {
+      queryClient.setQueryData(["server", "extensions"], registry);
+      setValidationByExtensionId((current) => {
+        const next = { ...current };
+        delete next[entry.manifest.id];
+        return next;
+      });
+      toastManager.add({
+        title: "Extension uninstalled",
+        description: "The extension was removed from the local registry.",
+        type: "success",
+      });
+    },
+    onError: (error) => {
+      toastManager.add({
+        title: "Unable to uninstall extension",
+        description: error instanceof Error ? error.message : "The extension was not removed.",
         type: "error",
       });
     },
@@ -335,7 +399,25 @@ export function ExtensionsSettingsPanel() {
 
       <SettingsSection title="Installed">
         {installed.length > 0 ? (
-          installed.map((entry) => <ExtensionRow key={entry.path} entry={entry} />)
+          installed.map((entry) => {
+            const validation = validationByExtensionId[entry.manifest.id];
+            return (
+              <ExtensionRow
+                key={entry.path}
+                entry={entry}
+                {...(validation ? { validation } : {})}
+                validating={
+                  validateInstalledMutation.isPending &&
+                  validateInstalledMutation.variables?.path === entry.path
+                }
+                onValidate={() => validateInstalledMutation.mutate(entry)}
+                uninstalling={
+                  uninstallMutation.isPending && uninstallMutation.variables?.path === entry.path
+                }
+                onUninstall={() => uninstallMutation.mutate(entry)}
+              />
+            );
+          })
         ) : (
           <Empty className="min-h-56">
             <EmptyMedia variant="icon">
