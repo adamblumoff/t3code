@@ -83,6 +83,25 @@ function registryError(input: {
   });
 }
 
+function errorMessage(cause: unknown): string | undefined {
+  if (cause instanceof Error) {
+    return cause.message.trim() || undefined;
+  }
+  if (typeof cause === "string") {
+    return cause.trim() || undefined;
+  }
+  return undefined;
+}
+
+function detailWithCause(detail: string, cause: unknown): string {
+  const message = errorMessage(cause);
+  if (!message) {
+    return detail;
+  }
+  const singleLineMessage = message.replaceAll(/\s+/g, " ").slice(0, 1_000);
+  return `${detail}: ${singleLineMessage}`;
+}
+
 function isSafeExtensionDirectoryName(extensionId: string): boolean {
   return /^[a-z0-9][a-z0-9._-]*$/.test(extensionId) && !extensionId.includes("..");
 }
@@ -516,6 +535,9 @@ export function createExtensionPreviewVariant(
     const baseGitCommit =
       revParseResult && revParseResult.code === 0 ? revParseResult.stdout.trim() : undefined;
 
+    yield* fs
+      .remove(sourceDir, { recursive: true, force: true })
+      .pipe(Effect.catch(() => Effect.void));
     yield* Effect.tryPromise({
       try: () =>
         runProcess("git", ["clone", "--no-hardlinks", "--local", config.cwd, sourceDir], {
@@ -527,7 +549,7 @@ export function createExtensionPreviewVariant(
       catch: (cause) =>
         registryError({
           path: sourceDir,
-          detail: "failed to materialize extension preview source",
+          detail: detailWithCause("failed to materialize extension preview source", cause),
           cause,
         }),
     });
@@ -542,7 +564,7 @@ export function createExtensionPreviewVariant(
       catch: (cause) =>
         registryError({
           path: validation.patchPath,
-          detail: "failed to apply extension patch to preview variant",
+          detail: detailWithCause("failed to apply extension patch to preview variant", cause),
           cause,
         }),
     });
