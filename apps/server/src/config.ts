@@ -39,6 +39,10 @@ export interface ServerDerivedPaths {
   readonly providerLogsDir: string;
   readonly providerEventLogPath: string;
   readonly terminalLogsDir: string;
+  readonly extensionsDir: string;
+  readonly extensionDraftsDir: string;
+  readonly extensionInstalledDir: string;
+  readonly extensionVariantsDir: string;
   readonly anonymousIdPath: string;
   readonly environmentIdPath: string;
   readonly serverRuntimeStatePath: string;
@@ -100,6 +104,10 @@ export const deriveServerPaths = Effect.fn(function* (
     providerLogsDir,
     providerEventLogPath: join(providerLogsDir, "events.log"),
     terminalLogsDir: join(logsDir, "terminals"),
+    extensionsDir: join(stateDir, "extensions"),
+    extensionDraftsDir: join(stateDir, "extensions", "drafts"),
+    extensionInstalledDir: join(stateDir, "extensions", "installed"),
+    extensionVariantsDir: join(stateDir, "extensions", "variants"),
     anonymousIdPath: join(stateDir, "anonymous-id"),
     environmentIdPath: join(stateDir, "environment-id"),
     serverRuntimeStatePath: join(stateDir, "server-runtime.json"),
@@ -117,6 +125,9 @@ export const ensureServerDirectories = Effect.fn(function* (derivedPaths: Server
       fs.makeDirectory(derivedPaths.logsDir, { recursive: true }),
       fs.makeDirectory(derivedPaths.providerLogsDir, { recursive: true }),
       fs.makeDirectory(derivedPaths.terminalLogsDir, { recursive: true }),
+      fs.makeDirectory(derivedPaths.extensionDraftsDir, { recursive: true }),
+      fs.makeDirectory(derivedPaths.extensionInstalledDir, { recursive: true }),
+      fs.makeDirectory(derivedPaths.extensionVariantsDir, { recursive: true }),
       fs.makeDirectory(derivedPaths.attachmentsDir, { recursive: true }),
       fs.makeDirectory(derivedPaths.worktreesDir, { recursive: true }),
       fs.makeDirectory(path.dirname(derivedPaths.keybindingsConfigPath), { recursive: true }),

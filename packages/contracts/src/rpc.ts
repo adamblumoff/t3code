@@ -10,6 +10,11 @@ import {
   FilesystemBrowseError,
 } from "./filesystem.ts";
 import {
+  ExtensionCreateDraftInput,
+  ExtensionRegistry,
+  ExtensionRegistryError,
+} from "./extensions.ts";
+import {
   GitActionProgressEvent,
   VcsSwitchRefInput,
   VcsSwitchRefResult,
@@ -146,6 +151,8 @@ export const WS_METHODS = {
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
   serverSignalProcess: "server.signalProcess",
+  serverListExtensions: "server.listExtensions",
+  serverCreateExtensionDraft: "server.createExtensionDraft",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -227,6 +234,18 @@ export const WsServerGetProcessDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetPro
 export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess, {
   payload: ServerSignalProcessInput,
   success: ServerSignalProcessResult,
+});
+
+export const WsServerListExtensionsRpc = Rpc.make(WS_METHODS.serverListExtensions, {
+  payload: Schema.Struct({}),
+  success: ExtensionRegistry,
+  error: ExtensionRegistryError,
+});
+
+export const WsServerCreateExtensionDraftRpc = Rpc.make(WS_METHODS.serverCreateExtensionDraft, {
+  payload: ExtensionCreateDraftInput,
+  success: ExtensionRegistry,
+  error: ExtensionRegistryError,
 });
 
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
@@ -464,6 +483,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,
   WsServerSignalProcessRpc,
+  WsServerListExtensionsRpc,
+  WsServerCreateExtensionDraftRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,

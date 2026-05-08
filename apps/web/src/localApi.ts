@@ -159,6 +159,14 @@ function createBrowserLocalApi(rpcClient?: WsRpcClient): LocalApi {
         rpcClient
           ? rpcClient.server.signalProcess(input)
           : Promise.reject(unavailableLocalBackendError()),
+      listExtensions: () =>
+        rpcClient
+          ? rpcClient.server.listExtensions()
+          : Promise.reject(unavailableLocalBackendError()),
+      createExtensionDraft: (input) =>
+        rpcClient
+          ? rpcClient.server.createExtensionDraft(input)
+          : Promise.reject(unavailableLocalBackendError()),
     },
   };
 }

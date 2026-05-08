@@ -19,6 +19,7 @@ import type {
   VcsCreateRefResult,
 } from "./git.ts";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem.ts";
+import type { ExtensionCreateDraftInput, ExtensionRegistry } from "./extensions.ts";
 import type {
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
@@ -475,6 +476,8 @@ export interface LocalApi {
     getTraceDiagnostics: () => Promise<ServerTraceDiagnosticsResult>;
     getProcessDiagnostics: () => Promise<ServerProcessDiagnosticsResult>;
     signalProcess: (input: ServerSignalProcessInput) => Promise<ServerSignalProcessResult>;
+    listExtensions: () => Promise<ExtensionRegistry>;
+    createExtensionDraft: (input: ExtensionCreateDraftInput) => Promise<ExtensionRegistry>;
   };
 }
 
