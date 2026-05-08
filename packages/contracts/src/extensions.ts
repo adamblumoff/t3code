@@ -46,6 +46,19 @@ export const ExtensionRegistryEntry = Schema.Struct({
 });
 export type ExtensionRegistryEntry = typeof ExtensionRegistryEntry.Type;
 
+export const ExtensionActiveStack = Schema.Struct({
+  activeDir: TrimmedNonEmptyString,
+  sourceDir: TrimmedNonEmptyString,
+  stackPath: TrimmedNonEmptyString,
+  desiredExtensionIds: Schema.Array(Schema.String),
+  builtExtensionIds: Schema.Array(Schema.String),
+  currentSourceDir: Schema.optional(TrimmedNonEmptyString),
+  builtAt: Schema.optional(IsoDateTime),
+  runningActiveSource: Schema.Boolean,
+  restartRequired: Schema.Boolean,
+});
+export type ExtensionActiveStack = typeof ExtensionActiveStack.Type;
+
 export const ExtensionDraftTemplateId = Schema.Literal("dense-sidebar");
 export type ExtensionDraftTemplateId = typeof ExtensionDraftTemplateId.Type;
 
@@ -91,6 +104,7 @@ export const ExtensionRegistry = Schema.Struct({
   installed: Schema.Array(ExtensionRegistryEntry),
   drafts: Schema.Array(ExtensionRegistryEntry),
   variants: Schema.Array(ExtensionPreviewVariantEntry),
+  activeStack: ExtensionActiveStack,
 });
 export type ExtensionRegistry = typeof ExtensionRegistry.Type;
 

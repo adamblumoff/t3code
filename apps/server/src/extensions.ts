@@ -2,6 +2,7 @@ import {
   ExtensionRegistryError,
   ExtensionManifest,
   ExtensionPreviewVariantEntry,
+  type ExtensionActiveStack,
   type ExtensionCreateDraftInput,
   type ExtensionCreatePreviewVariantInput,
   type ExtensionInstallPreviewVariantInput,
@@ -58,6 +59,15 @@ const encodeActiveStack = Schema.encodeEffect(
       builtAt: Schema.String,
       sourceDir: Schema.String,
       enabledExtensionIds: Schema.Array(Schema.String),
+    }),
+  ),
+);
+const decodeActiveStack = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      builtAt: Schema.optional(Schema.String),
+      sourceDir: Schema.optional(Schema.String),
+      enabledExtensionIds: Schema.optional(Schema.Array(Schema.String)),
     }),
   ),
 );
@@ -244,6 +254,15 @@ function resolveActivePaths(config: Pick<ServerConfigShape, "extensionInstalledD
   });
 }
 
+function normalizePathForCompare(path: string): string {
+  const normalized = path.replaceAll("\\", "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function samePath(left: string | undefined, right: string | undefined): boolean {
+  return Boolean(left && right && normalizePathForCompare(left) === normalizePathForCompare(right));
+}
+
 function resolveVariantPaths(
   config: Pick<ServerConfigShape, "extensionVariantsDir">,
   input: {
@@ -396,6 +415,36 @@ function prunePreviewVariants(input: {
             registryError({
               path: variantDir,
               detail: "failed to prune stale extension preview variant",
+              cause,
+            }),
+          ),
+        );
+      },
+      { concurrency: 4 },
+    );
+  });
+}
+
+function pruneActiveBuildDirectories(input: {
+  readonly activeDir: string;
+  readonly keepBuildDir?: string;
+}): Effect.Effect<void, ExtensionRegistryError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const pathService = yield* Path.Path;
+    const names = yield* readDirectoryNames(input.activeDir);
+    yield* Effect.forEach(
+      names,
+      (name) => {
+        const buildDir = pathService.join(input.activeDir, name);
+        if (!name.startsWith("build-") || buildDir === input.keepBuildDir) {
+          return Effect.void;
+        }
+        return fs.remove(buildDir, { recursive: true, force: true }).pipe(
+          Effect.mapError((cause) =>
+            registryError({
+              path: buildDir,
+              detail: "failed to prune stale active extension build directory",
               cause,
             }),
           ),
@@ -633,11 +682,65 @@ function readVariantEntries(
   );
 }
 
+function readActiveStack(
+  config: Pick<ServerConfigShape, "extensionInstalledDir"> &
+    Partial<Pick<ServerConfigShape, "cwd">>,
+  installed: ReadonlyArray<ExtensionRegistryEntry>,
+): Effect.Effect<ExtensionActiveStack, ExtensionRegistryError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const activePaths = yield* resolveActivePaths(config);
+    const desiredExtensionIds = installed
+      .filter((entry) => entry.state === "enabled")
+      .map((entry) => entry.manifest.id)
+      .toSorted((left, right) => left.localeCompare(right));
+
+    const stackExists = yield* fs
+      .exists(activePaths.stackPath)
+      .pipe(Effect.orElseSucceed(() => false));
+    const storedStack = stackExists
+      ? yield* fs.readFileString(activePaths.stackPath).pipe(
+          Effect.flatMap((raw) => decodeActiveStack(raw)),
+          Effect.mapError((cause) =>
+            registryError({
+              path: activePaths.stackPath,
+              detail: "failed to read active extension stack metadata",
+              cause,
+            }),
+          ),
+        )
+      : {};
+    const builtExtensionIds = (storedStack.enabledExtensionIds ?? [])
+      .filter(isSafeExtensionDirectoryName)
+      .toSorted((left, right) => left.localeCompare(right));
+    const currentSourceDir = config.cwd ? yield* resolveGitRoot({ cwd: config.cwd }) : undefined;
+    const runningActiveSource = samePath(currentSourceDir, activePaths.sourceDir);
+    const stackMatchesDesired =
+      desiredExtensionIds.length === builtExtensionIds.length &&
+      desiredExtensionIds.every((id, index) => id === builtExtensionIds[index]);
+    const restartRequired =
+      !stackMatchesDesired || (desiredExtensionIds.length > 0 && !runningActiveSource);
+
+    return {
+      activeDir: activePaths.activeDir,
+      sourceDir: activePaths.sourceDir,
+      stackPath: activePaths.stackPath,
+      desiredExtensionIds,
+      builtExtensionIds,
+      ...(currentSourceDir ? { currentSourceDir } : {}),
+      ...(storedStack.builtAt ? { builtAt: storedStack.builtAt } : {}),
+      runningActiveSource,
+      restartRequired,
+    };
+  });
+}
+
 export function listExtensions(
   config: Pick<
     ServerConfigShape,
     "extensionInstalledDir" | "extensionDraftsDir" | "extensionVariantsDir"
-  >,
+  > &
+    Partial<Pick<ServerConfigShape, "cwd">>,
 ): Effect.Effect<ExtensionRegistry, ExtensionRegistryError, FileSystem.FileSystem | Path.Path> {
   return Effect.all({
     installed: readEntries({
@@ -650,14 +753,19 @@ export function listExtensions(
     }),
     variants: readVariantEntries(config.extensionVariantsDir),
   }).pipe(
-    Effect.map(({ installed, drafts, variants }) => ({
-      installedDir: config.extensionInstalledDir,
-      draftsDir: config.extensionDraftsDir,
-      variantsDir: config.extensionVariantsDir,
-      installed,
-      drafts,
-      variants,
-    })),
+    Effect.flatMap(({ installed, drafts, variants }) =>
+      readActiveStack(config, installed).pipe(
+        Effect.map((activeStack) => ({
+          installedDir: config.extensionInstalledDir,
+          draftsDir: config.extensionDraftsDir,
+          variantsDir: config.extensionVariantsDir,
+          installed,
+          drafts,
+          variants,
+          activeStack,
+        })),
+      ),
+    ),
   );
 }
 
@@ -726,6 +834,10 @@ function rebuildActiveExtensionStack(
     const enabledEntries = installedEntries.filter(({ entry }) =>
       entry.manifest.id === input.extensionId ? input.enabled : entry.state === "enabled",
     );
+    yield* pruneActiveBuildDirectories({
+      activeDir: activePaths.activeDir,
+      keepBuildDir: buildDir,
+    });
 
     const build = Effect.gen(function* () {
       yield* fs.makeDirectory(buildDir, { recursive: true }).pipe(
@@ -836,6 +948,11 @@ function rebuildActiveExtensionStack(
       ),
       Effect.andThen(
         fs.remove(buildDir, { recursive: true, force: true }).pipe(Effect.catch(() => Effect.void)),
+      ),
+      Effect.andThen(
+        pruneActiveBuildDirectories({ activeDir: activePaths.activeDir }).pipe(
+          Effect.catch(() => Effect.void),
+        ),
       ),
     );
   });

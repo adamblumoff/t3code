@@ -3,6 +3,7 @@ import {
   CircleAlertIcon,
   EyeIcon,
   DownloadIcon,
+  FolderOpenIcon,
   PackageIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -20,6 +21,7 @@ import type {
 import { useState } from "react";
 
 import { ensureLocalApi } from "../../localApi";
+import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
 import { Switch } from "../ui/switch";
@@ -37,6 +39,15 @@ function extensionStateLabel(entry: ExtensionRegistryEntry): string {
     case "incompatible":
       return "Needs repair";
   }
+}
+
+function activeStackStatusLabel(registry: ExtensionRegistry | undefined): string | undefined {
+  const stack = registry?.activeStack;
+  if (!stack) return undefined;
+  if (stack.restartRequired) return "Restart dev server";
+  if (stack.runningActiveSource) return "Running active source";
+  if (stack.desiredExtensionIds.length > 0) return "Active source ready";
+  return "No enabled extensions";
 }
 
 function ExtensionRow({
@@ -386,10 +397,23 @@ export function ExtensionsSettingsPanel() {
       });
     },
   });
+  const openActiveSourceMutation = useMutation({
+    mutationFn: (sourceDir: string) =>
+      ensureLocalApi().shell.openInEditor(sourceDir, "file-manager"),
+    onError: (error) => {
+      toastManager.add({
+        title: "Unable to open active source",
+        description:
+          error instanceof Error ? error.message : "The active source folder was not opened.",
+        type: "error",
+      });
+    },
+  });
   const registry = extensionsQuery.data;
   const installed = registry?.installed ?? [];
   const drafts = registry?.drafts ?? [];
   const variants = registry?.variants ?? [];
+  const activeStack = registry?.activeStack;
   const installedExtensionIds = new Set(installed.map((entry) => entry.manifest.id));
   const latestVariantByExtensionId = new Map<string, ExtensionPreviewVariantEntry>();
   for (const variant of variants) {
@@ -438,7 +462,37 @@ export function ExtensionsSettingsPanel() {
           description={registry ? registry.installedDir : "Loading local extension registry."}
           status={registry ? `Drafts: ${registry.draftsDir}` : undefined}
         />
+        {activeStack ? (
+          <SettingsRow
+            title="Active source"
+            description={activeStack.sourceDir}
+            status={activeStackStatusLabel(registry)}
+            control={
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={openActiveSourceMutation.isPending}
+                onClick={() => openActiveSourceMutation.mutate(activeStack.sourceDir)}
+              >
+                <FolderOpenIcon className="size-3.5" />
+                Open
+              </Button>
+            }
+          />
+        ) : null}
       </SettingsSection>
+
+      {activeStack?.restartRequired ? (
+        <Alert variant="warning" className="mx-1">
+          <CircleAlertIcon />
+          <AlertTitle>Restart dev server to apply</AlertTitle>
+          <AlertDescription>
+            {activeStack.runningActiveSource
+              ? "The enabled extension set changed after this source was started."
+              : "Enabled extensions are built. Restart your usual dev command and it will run the active source automatically."}
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       <SettingsSection title="Installed">
         {installed.length > 0 ? (

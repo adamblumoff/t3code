@@ -12,6 +12,7 @@ import * as Hash from "effect/Hash";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
+import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { Argument, Command, Flag } from "effect/unstable/cli";
@@ -23,6 +24,13 @@ const MAX_HASH_OFFSET = 3000;
 const MAX_PORT = 65535;
 const DESKTOP_DEV_LOOPBACK_HOST = "127.0.0.1";
 const DEV_PORT_PROBE_HOSTS = ["127.0.0.1", "0.0.0.0", "::1", "::"] as const;
+const ACTIVE_EXTENSION_STACK_JSON = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      enabledExtensionIds: Schema.optional(Schema.Array(Schema.String)),
+    }),
+  ),
+);
 
 export const DEFAULT_T3_HOME = Effect.map(Effect.service(Path.Path), (path) =>
   path.join(NodeOS.homedir(), ".t3"),
@@ -121,6 +129,66 @@ function resolveBaseDir(baseDir: string | undefined): Effect.Effect<string, neve
     }
 
     return yield* DEFAULT_T3_HOME;
+  });
+}
+
+function normalizePathForCompare(value: string): string {
+  const normalized = value.replaceAll("\\", "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function samePath(left: string, right: string): boolean {
+  return normalizePathForCompare(left) === normalizePathForCompare(right);
+}
+
+function resolveDevRunnerCwd(input: {
+  readonly baseDir: string;
+  readonly currentCwd: string;
+}): Effect.Effect<string, DevRunnerError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+
+    if (process.env.T3CODE_DISABLE_EXTENSION_ACTIVE_SOURCE === "1") {
+      return input.currentCwd;
+    }
+
+    const activeDir = path.join(input.baseDir, "dev", "extensions", "active");
+    const stackPath = path.join(activeDir, "stack.json");
+    const sourceDir = path.join(activeDir, "source");
+    const stackExists = yield* fs.exists(stackPath).pipe(Effect.orElseSucceed(() => false));
+    if (!stackExists) {
+      return input.currentCwd;
+    }
+
+    const stack = yield* fs.readFileString(stackPath).pipe(
+      Effect.flatMap((raw) => ACTIVE_EXTENSION_STACK_JSON(raw)),
+      Effect.mapError(
+        (cause) =>
+          new DevRunnerError({
+            message: `Failed to read active extension stack at ${stackPath}.`,
+            cause,
+          }),
+      ),
+    );
+    if ((stack.enabledExtensionIds ?? []).length === 0) {
+      return input.currentCwd;
+    }
+
+    const sourcePackagePath = path.join(sourceDir, "package.json");
+    const sourceReady = yield* fs.exists(sourcePackagePath).pipe(Effect.orElseSucceed(() => false));
+    if (!sourceReady) {
+      return yield* new DevRunnerError({
+        message: `Extensions are enabled, but active source is missing at ${sourceDir}. Recreate the extension preview or toggle the extension again.`,
+      });
+    }
+
+    const resolvedSourceDir = path.resolve(sourceDir);
+    if (samePath(path.resolve(input.currentCwd), resolvedSourceDir)) {
+      return input.currentCwd;
+    }
+
+    return resolvedSourceDir;
   });
 }
 
@@ -424,14 +492,19 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       port: input.port,
       devUrl: input.devUrl,
     });
+    const runnerCwd = yield* resolveDevRunnerCwd({
+      baseDir: String(env.T3CODE_HOME),
+      currentCwd: process.cwd(),
+    });
 
     const selectionSuffix =
       serverOffset !== offset || webOffset !== offset
         ? ` selectedOffset(server=${serverOffset},web=${webOffset})`
         : "";
+    const sourceSuffix = samePath(process.cwd(), runnerCwd) ? "" : ` cwd=${runnerCwd}`;
 
     yield* Effect.logInfo(
-      `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.T3CODE_PORT)} webPort=${String(env.PORT)} baseDir=${String(env.T3CODE_HOME)}`,
+      `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.T3CODE_PORT)} webPort=${String(env.PORT)} baseDir=${String(env.T3CODE_HOME)}${sourceSuffix}`,
     );
 
     if (input.dryRun) {
@@ -445,6 +518,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
         stdin: "inherit",
         stdout: "inherit",
         stderr: "inherit",
+        cwd: runnerCwd,
         env,
         extendEnv: false,
         // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
