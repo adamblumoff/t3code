@@ -1,9 +1,6 @@
 import {
   CheckCircleIcon,
   CircleAlertIcon,
-  EyeIcon,
-  DownloadIcon,
-  FolderOpenIcon,
   PackageIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -12,12 +9,7 @@ import {
   WrenchIcon,
 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type {
-  ExtensionPatchValidationResult,
-  ExtensionPreviewVariantEntry,
-  ExtensionRegistry,
-  ExtensionRegistryEntry,
-} from "@t3tools/contracts";
+import type { ExtensionPatchValidationResult, ExtensionRegistryEntry } from "@t3tools/contracts";
 import { useState } from "react";
 
 import { ensureLocalApi } from "../../localApi";
@@ -41,36 +33,26 @@ function extensionStateLabel(entry: ExtensionRegistryEntry): string {
   }
 }
 
-function activeStackStatusLabel(registry: ExtensionRegistry | undefined): string | undefined {
-  const stack = registry?.activeStack;
-  if (!stack) return undefined;
-  if (stack.restartRequired) return "Workspace out of sync";
-  if (stack.desiredExtensionIds.length > 0) return "Live patches applied";
-  return "No enabled extensions";
-}
-
 function ExtensionRow({
   entry,
   validation,
-  preview,
   validating,
-  creatingPreview,
+  building,
   uninstalling,
   toggling,
   onValidate,
-  onCreatePreview,
+  onBuild,
   onUninstall,
   onToggleEnabled,
 }: {
   entry: ExtensionRegistryEntry;
   validation?: ExtensionPatchValidationResult;
-  preview?: ExtensionPreviewVariantEntry;
   validating?: boolean;
-  creatingPreview?: boolean;
+  building?: boolean;
   uninstalling?: boolean;
   toggling?: boolean;
   onValidate?: () => void;
-  onCreatePreview?: () => void;
+  onBuild?: () => void;
   onUninstall?: () => void;
   onToggleEnabled?: (enabled: boolean) => void;
 }) {
@@ -83,7 +65,6 @@ function ExtensionRow({
       ? "Patch applies"
       : "Patch conflict"
     : null;
-  const previewLabel = preview ? "Preview ready" : null;
   return (
     <SettingsRow
       title={entry.manifest.name}
@@ -101,14 +82,13 @@ function ExtensionRow({
               {validationLabel}
             </span>
           ) : null}
-          {previewLabel ? <span className="text-success">{previewLabel}</span> : null}
           {baseLabel ? (
             <span className="min-w-0 truncate text-muted-foreground/50">{baseLabel}</span>
           ) : null}
         </span>
       }
       control={
-        onValidate || onUninstall || onToggleEnabled ? (
+        onValidate || onBuild || onUninstall || onToggleEnabled ? (
           <span className="inline-flex items-center gap-1.5">
             {onToggleEnabled ? (
               <Switch
@@ -130,15 +110,10 @@ function ExtensionRow({
                 {validating ? "Checking" : validation ? "Recheck" : "Validate"}
               </Button>
             ) : null}
-            {onCreatePreview ? (
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={creatingPreview}
-                onClick={onCreatePreview}
-              >
-                <EyeIcon className="size-3.5" />
-                {creatingPreview ? "Creating" : preview ? "Recreate" : "Preview"}
+            {onBuild ? (
+              <Button size="xs" variant="outline" disabled={building} onClick={onBuild}>
+                <PackageIcon className="size-3.5" />
+                {building ? "Building" : "Build"}
               </Button>
             ) : null}
             {onUninstall ? (
@@ -153,55 +128,6 @@ function ExtensionRow({
             {entry.manifest.id}
           </code>
         )
-      }
-    />
-  );
-}
-
-function VariantRow({
-  variant,
-  installed,
-  installing,
-  onInstall,
-}: {
-  variant: ExtensionPreviewVariantEntry;
-  installed: boolean;
-  installing?: boolean;
-  onInstall: () => void;
-}) {
-  return (
-    <SettingsRow
-      title={variant.extensionId}
-      description={variant.detail}
-      status={
-        <span className="inline-flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-          <span className={variant.status === "ready" ? "text-success" : "text-destructive"}>
-            {variant.status === "ready" ? "Preview ready" : "Preview failed"}
-          </span>
-          {variant.baseGitCommit ? (
-            <span className="text-muted-foreground/50">{variant.baseGitCommit.slice(0, 8)}</span>
-          ) : null}
-        </span>
-      }
-      control={
-        <span className="inline-flex items-center gap-1.5">
-          <code className="max-w-54 truncate rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-            {variant.variantId}
-          </code>
-          <Button
-            size="xs"
-            variant="outline"
-            disabled={installed || installing || variant.status !== "ready"}
-            onClick={onInstall}
-          >
-            {installed ? (
-              <CheckCircleIcon className="size-3.5 text-success" />
-            ) : (
-              <DownloadIcon className="size-3.5" />
-            )}
-            {installing ? "Installing" : installed ? "Installed" : "Install"}
-          </Button>
-        </span>
       }
     />
   );
@@ -222,7 +148,7 @@ export function ExtensionsSettingsPanel() {
       queryClient.setQueryData(["server", "extensions"], registry);
       toastManager.add({
         title: "Draft created",
-        description: "Dense Sidebar is ready to preview from the Drafts section.",
+        description: "Dense Sidebar is ready to build.",
         type: "success",
       });
     },
@@ -285,57 +211,30 @@ export function ExtensionsSettingsPanel() {
       });
     },
   });
-  const createPreviewMutation = useMutation({
-    mutationFn: (entry: ExtensionRegistryEntry) =>
-      ensureLocalApi().server.createExtensionPreviewVariant({
+  const buildDraftMutation = useMutation({
+    mutationFn: async (entry: ExtensionRegistryEntry) => {
+      const api = ensureLocalApi();
+      const variant = await api.server.createExtensionPreviewVariant({
         extensionId: entry.manifest.id,
-      }),
-    onSuccess: (variant) => {
-      queryClient.setQueryData<ExtensionRegistry>(["server", "extensions"], (current) =>
-        current
-          ? {
-              ...current,
-              variants: [
-                variant,
-                ...current.variants.filter((entry) => entry.extensionId !== variant.extensionId),
-              ],
-            }
-          : current,
-      );
-      toastManager.add({
-        title: "Preview ready",
-        description: "The extension patch was applied to an isolated source variant.",
-        type: "success",
       });
-    },
-    onError: (error) => {
-      toastManager.add({
-        title: "Unable to create preview",
-        description:
-          error instanceof Error ? error.message : "The extension preview variant was not created.",
-        type: "error",
-      });
-    },
-  });
-  const installPreviewMutation = useMutation({
-    mutationFn: (variant: ExtensionPreviewVariantEntry) =>
-      ensureLocalApi().server.installExtensionPreviewVariant({
+      return api.server.installExtensionPreviewVariant({
         extensionId: variant.extensionId,
         variantId: variant.variantId,
-      }),
+      });
+    },
     onSuccess: (registry) => {
       queryClient.setQueryData(["server", "extensions"], registry);
       toastManager.add({
-        title: "Extension installed",
-        description: "The extension is installed. Toggle it on to add it to the active stack.",
+        title: "Extension built",
+        description: "The extension is installed and ready to activate.",
         type: "success",
       });
     },
     onError: (error) => {
       toastManager.add({
-        title: "Unable to install extension",
+        title: "Unable to build extension",
         description:
-          error instanceof Error ? error.message : "The extension preview was not installed.",
+          error instanceof Error ? error.message : "The extension was not built or installed.",
         type: "error",
       });
     },
@@ -391,19 +290,7 @@ export function ExtensionsSettingsPanel() {
       toastManager.add({
         title: input.enabled ? "Unable to enable extension" : "Unable to disable extension",
         description:
-          error instanceof Error ? error.message : "The active extension stack was not updated.",
-        type: "error",
-      });
-    },
-  });
-  const openActiveSourceMutation = useMutation({
-    mutationFn: (sourceDir: string) =>
-      ensureLocalApi().shell.openInEditor(sourceDir, "file-manager"),
-    onError: (error) => {
-      toastManager.add({
-        title: "Unable to open workspace",
-        description:
-          error instanceof Error ? error.message : "The workspace folder was not opened.",
+          error instanceof Error ? error.message : "The extension state was not updated.",
         type: "error",
       });
     },
@@ -411,21 +298,12 @@ export function ExtensionsSettingsPanel() {
   const registry = extensionsQuery.data;
   const installed = registry?.installed ?? [];
   const drafts = registry?.drafts ?? [];
-  const variants = registry?.variants ?? [];
   const activeStack = registry?.activeStack;
-  const installedExtensionIds = new Set(installed.map((entry) => entry.manifest.id));
-  const latestVariantByExtensionId = new Map<string, ExtensionPreviewVariantEntry>();
-  for (const variant of variants) {
-    if (!latestVariantByExtensionId.has(variant.extensionId)) {
-      latestVariantByExtensionId.set(variant.extensionId, variant);
-    }
-  }
-  const isEmpty = installed.length === 0 && drafts.length === 0 && variants.length === 0;
 
   return (
     <SettingsPageContainer>
       <SettingsSection
-        title="Extensions"
+        title="Build"
         headerAction={
           <Button
             size="icon-xs"
@@ -443,7 +321,7 @@ export function ExtensionsSettingsPanel() {
       >
         <SettingsRow
           title="Patch Studio"
-          description="Local patch extensions are created as drafts, previewed as patched variants, then installed into the active recipe."
+          description="Create local patch extensions and build them into installed extensions."
           control={
             <Button
               size="xs"
@@ -456,29 +334,37 @@ export function ExtensionsSettingsPanel() {
             </Button>
           }
         />
-        <SettingsRow
-          title="Extension storage"
-          description={registry ? registry.installedDir : "Loading local extension registry."}
-          status={registry ? `Drafts: ${registry.draftsDir}` : undefined}
-        />
-        {activeStack ? (
-          <SettingsRow
-            title="Live workspace"
-            description={activeStack.sourceDir}
-            status={activeStackStatusLabel(registry)}
-            control={
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={openActiveSourceMutation.isPending}
-                onClick={() => openActiveSourceMutation.mutate(activeStack.sourceDir)}
-              >
-                <FolderOpenIcon className="size-3.5" />
-                Open
-              </Button>
-            }
-          />
-        ) : null}
+        {drafts.length > 0 ? (
+          drafts.map((entry) => {
+            const validation = validationByExtensionId[entry.manifest.id];
+            return (
+              <ExtensionRow
+                key={entry.path}
+                entry={entry}
+                {...(validation ? { validation } : {})}
+                validating={
+                  validateDraftMutation.isPending &&
+                  validateDraftMutation.variables?.path === entry.path
+                }
+                onValidate={() => validateDraftMutation.mutate(entry)}
+                building={
+                  buildDraftMutation.isPending && buildDraftMutation.variables?.path === entry.path
+                }
+                onBuild={() => buildDraftMutation.mutate(entry)}
+              />
+            );
+          })
+        ) : (
+          <Empty className="min-h-56">
+            <EmptyMedia variant="icon">
+              <WrenchIcon />
+            </EmptyMedia>
+            <EmptyHeader>
+              <EmptyTitle>No draft extensions</EmptyTitle>
+              <EmptyDescription>Drafts from Patch Studio will appear here.</EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        )}
       </SettingsSection>
 
       {activeStack?.restartRequired ? (
@@ -486,13 +372,13 @@ export function ExtensionsSettingsPanel() {
           <CircleAlertIcon />
           <AlertTitle>Extension workspace is out of sync</AlertTitle>
           <AlertDescription>
-            Toggle the extension again to re-apply the live patch stack. If the patch no longer
-            applies cleanly, T3 will reject it before changing extension state.
+            Toggle the affected extension again. T3 will reject the change if the patch cannot be
+            applied cleanly.
           </AlertDescription>
         </Alert>
       ) : null}
 
-      <SettingsSection title="Installed">
+      <SettingsSection title="Activate">
         {installed.length > 0 ? (
           installed.map((entry) => {
             const validation = validationByExtensionId[entry.manifest.id];
@@ -524,45 +410,8 @@ export function ExtensionsSettingsPanel() {
               <PackageIcon />
             </EmptyMedia>
             <EmptyHeader>
-              <EmptyTitle>No installed extensions</EmptyTitle>
-              <EmptyDescription>Installed patch extensions will appear here.</EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        )}
-      </SettingsSection>
-
-      <SettingsSection title="Drafts">
-        {drafts.length > 0 ? (
-          drafts.map((entry) => {
-            const validation = validationByExtensionId[entry.manifest.id];
-            const preview = latestVariantByExtensionId.get(entry.manifest.id);
-            return (
-              <ExtensionRow
-                key={entry.path}
-                entry={entry}
-                {...(validation ? { validation } : {})}
-                {...(preview ? { preview } : {})}
-                validating={
-                  validateDraftMutation.isPending &&
-                  validateDraftMutation.variables?.path === entry.path
-                }
-                onValidate={() => validateDraftMutation.mutate(entry)}
-                creatingPreview={
-                  createPreviewMutation.isPending &&
-                  createPreviewMutation.variables?.path === entry.path
-                }
-                onCreatePreview={() => createPreviewMutation.mutate(entry)}
-              />
-            );
-          })
-        ) : (
-          <Empty className="min-h-56">
-            <EmptyMedia variant="icon">
-              <WrenchIcon />
-            </EmptyMedia>
-            <EmptyHeader>
-              <EmptyTitle>No draft extensions</EmptyTitle>
-              <EmptyDescription>Patch Studio drafts will appear here.</EmptyDescription>
+              <EmptyTitle>No built extensions</EmptyTitle>
+              <EmptyDescription>Built extensions will appear here.</EmptyDescription>
             </EmptyHeader>
           </Empty>
         )}
@@ -580,34 +429,6 @@ export function ExtensionsSettingsPanel() {
           />
         </SettingsSection>
       ) : null}
-
-      {isEmpty ? null : (
-        <SettingsSection title="Variants">
-          {variants.length > 0 ? (
-            variants.map((variant) => {
-              const installed = installedExtensionIds.has(variant.extensionId);
-              return (
-                <VariantRow
-                  key={`${variant.extensionId}:${variant.variantId}`}
-                  variant={variant}
-                  installed={installed}
-                  installing={
-                    installPreviewMutation.isPending &&
-                    installPreviewMutation.variables?.variantId === variant.variantId
-                  }
-                  onInstall={() => installPreviewMutation.mutate(variant)}
-                />
-              );
-            })
-          ) : (
-            <SettingsRow
-              title="No preview variants"
-              description="Validated draft extensions can create isolated preview source variants."
-              status={registry ? `Variants: ${registry.variantsDir}` : undefined}
-            />
-          )}
-        </SettingsSection>
-      )}
     </SettingsPageContainer>
   );
 }
