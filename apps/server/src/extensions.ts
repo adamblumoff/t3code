@@ -168,6 +168,11 @@ function resolveGitRoot(
   });
 }
 
+function resolvePatchBaseGitRoot(config: Pick<ServerConfigShape, "cwd">) {
+  const baseSourceRoot = process.env.T3CODE_EXTENSION_BASE_SOURCE_ROOT?.trim();
+  return resolveGitRoot({ cwd: baseSourceRoot || config.cwd });
+}
+
 function isSafeExtensionDirectoryName(extensionId: string): boolean {
   return /^[a-z0-9][a-z0-9._-]*$/.test(extensionId) && !extensionId.includes("..");
 }
@@ -254,6 +259,21 @@ function resolveActivePaths(config: Pick<ServerConfigShape, "extensionInstalledD
   });
 }
 
+function resolveSlottedActiveSourceDir(input: {
+  readonly activeDir: string;
+  readonly currentSourceDir: string | undefined;
+}) {
+  return Effect.gen(function* () {
+    const pathService = yield* Path.Path;
+    const sourceA = pathService.join(input.activeDir, "source-a");
+    const sourceB = pathService.join(input.activeDir, "source-b");
+    if (samePath(input.currentSourceDir, sourceA)) {
+      return sourceB;
+    }
+    return sourceA;
+  });
+}
+
 function normalizePathForCompare(path: string): string {
   const normalized = path.replaceAll("\\", "/").replace(/\/+$/, "");
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
@@ -261,6 +281,22 @@ function normalizePathForCompare(path: string): string {
 
 function samePath(left: string | undefined, right: string | undefined): boolean {
   return Boolean(left && right && normalizePathForCompare(left) === normalizePathForCompare(right));
+}
+
+function isManagedActiveSourceDir(input: {
+  readonly activeDir: string;
+  readonly sourceDir: string | undefined;
+}): boolean {
+  if (!input.sourceDir) {
+    return false;
+  }
+  const activeDir = `${normalizePathForCompare(input.activeDir)}/`;
+  const sourceDir = normalizePathForCompare(input.sourceDir);
+  return (
+    sourceDir === `${activeDir}source` ||
+    sourceDir === `${activeDir}source-a` ||
+    sourceDir === `${activeDir}source-b`
+  );
 }
 
 function resolveVariantPaths(
@@ -451,6 +487,34 @@ function pruneActiveBuildDirectories(input: {
         );
       },
       { concurrency: 4 },
+    );
+  });
+}
+
+function pruneInactiveActiveSources(input: {
+  readonly activeDir: string;
+  readonly keepSourceDirs: ReadonlyArray<string | undefined>;
+}): Effect.Effect<void, never, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const pathService = yield* Path.Path;
+    const names = yield* readDirectoryNames(input.activeDir).pipe(Effect.orElseSucceed(() => []));
+    const keep = input.keepSourceDirs.filter((value): value is string => Boolean(value));
+    yield* Effect.forEach(
+      names,
+      (name) => {
+        if (name !== "source" && name !== "source-a" && name !== "source-b") {
+          return Effect.void;
+        }
+        const sourceDir = pathService.join(input.activeDir, name);
+        if (keep.some((keepDir) => samePath(sourceDir, keepDir))) {
+          return Effect.void;
+        }
+        return fs
+          .remove(sourceDir, { recursive: true, force: true })
+          .pipe(Effect.catch(() => Effect.void));
+      },
+      { concurrency: 2 },
     );
   });
 }
@@ -710,11 +774,12 @@ function readActiveStack(
           ),
         )
       : {};
+    const sourceDir = storedStack.sourceDir ?? activePaths.sourceDir;
     const builtExtensionIds = (storedStack.enabledExtensionIds ?? [])
       .filter(isSafeExtensionDirectoryName)
       .toSorted((left, right) => left.localeCompare(right));
     const currentSourceDir = config.cwd ? yield* resolveGitRoot({ cwd: config.cwd }) : undefined;
-    const runningActiveSource = samePath(currentSourceDir, activePaths.sourceDir);
+    const runningActiveSource = samePath(currentSourceDir, sourceDir);
     const stackMatchesDesired =
       desiredExtensionIds.length === builtExtensionIds.length &&
       desiredExtensionIds.every((id, index) => id === builtExtensionIds[index]);
@@ -723,7 +788,7 @@ function readActiveStack(
 
     return {
       activeDir: activePaths.activeDir,
-      sourceDir: activePaths.sourceDir,
+      sourceDir,
       stackPath: activePaths.stackPath,
       desiredExtensionIds,
       builtExtensionIds,
@@ -823,8 +888,21 @@ function rebuildActiveExtensionStack(
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const pathService = yield* Path.Path;
-    const repositoryRoot = yield* resolveGitRoot(config);
+    const repositoryRoot = yield* resolvePatchBaseGitRoot(config);
     const activePaths = yield* resolveActivePaths(config);
+    const currentSourceDir = yield* resolveGitRoot({ cwd: config.cwd }).pipe(
+      Effect.orElseSucceed(() => undefined),
+    );
+    const replacingRunningSource = isManagedActiveSourceDir({
+      activeDir: activePaths.activeDir,
+      sourceDir: currentSourceDir,
+    });
+    const publishSourceDir = replacingRunningSource
+      ? yield* resolveSlottedActiveSourceDir({
+          activeDir: activePaths.activeDir,
+          currentSourceDir,
+        })
+      : activePaths.sourceDir;
     const buildId = `build-${DateTime.formatIso(yield* DateTime.now)
       .replace(/[^0-9a-z]/gi, "")
       .toLowerCase()}`;
@@ -904,7 +982,7 @@ function rebuildActiveExtensionStack(
 
       const stack = yield* encodeActiveStack({
         builtAt: DateTime.formatIso(yield* DateTime.now),
-        sourceDir: activePaths.sourceDir,
+        sourceDir: publishSourceDir,
         enabledExtensionIds: enabledEntries.map(({ entry }) => entry.manifest.id),
       }).pipe(
         Effect.mapError((cause) =>
@@ -915,19 +993,19 @@ function rebuildActiveExtensionStack(
           }),
         ),
       );
-      yield* fs.remove(activePaths.sourceDir, { recursive: true, force: true }).pipe(
+      yield* fs.remove(publishSourceDir, { recursive: true, force: true }).pipe(
         Effect.mapError((cause) =>
           registryError({
-            path: activePaths.sourceDir,
+            path: publishSourceDir,
             detail: "failed to replace active extension source",
             cause,
           }),
         ),
       );
-      yield* fs.rename(buildSourceDir, activePaths.sourceDir).pipe(
+      yield* fs.rename(buildSourceDir, publishSourceDir).pipe(
         Effect.mapError((cause) =>
           registryError({
-            path: activePaths.sourceDir,
+            path: publishSourceDir,
             detail: "failed to publish active extension source",
             cause,
           }),
@@ -953,6 +1031,12 @@ function rebuildActiveExtensionStack(
         pruneActiveBuildDirectories({ activeDir: activePaths.activeDir }).pipe(
           Effect.catch(() => Effect.void),
         ),
+      ),
+      Effect.andThen(
+        pruneInactiveActiveSources({
+          activeDir: activePaths.activeDir,
+          keepSourceDirs: [publishSourceDir, currentSourceDir],
+        }),
       ),
     );
   });
@@ -985,7 +1069,7 @@ export function validateExtensionDraft(
         detail: "extension draft does not include patches/app.patch",
       });
     }
-    const repositoryRoot = yield* resolveGitRoot(config);
+    const repositoryRoot = yield* resolvePatchBaseGitRoot(config);
 
     const result = yield* Effect.tryPromise({
       try: () =>
@@ -1047,7 +1131,7 @@ export function validateInstalledExtension(
         detail: "installed extension does not include patches/app.patch",
       });
     }
-    const repositoryRoot = yield* resolveGitRoot(config);
+    const repositoryRoot = yield* resolvePatchBaseGitRoot(config);
     const result = yield* Effect.tryPromise({
       try: () =>
         runProcess("git", ["-c", "core.longpaths=true", "apply", "--check", patchPath], {
@@ -1090,7 +1174,7 @@ export function createExtensionPreviewVariant(
     const fs = yield* FileSystem.FileSystem;
     const now = yield* DateTime.now;
     const extensionId = input.extensionId;
-    const repositoryRoot = yield* resolveGitRoot(config);
+    const repositoryRoot = yield* resolvePatchBaseGitRoot(config);
     const validation = yield* validateExtensionDraft(config, { extensionId });
     if (!validation.valid) {
       return yield* registryError({
