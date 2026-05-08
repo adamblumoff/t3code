@@ -1,6 +1,8 @@
 #!/usr/bin/env node
+// @effect-diagnostics nodeBuiltinImport:off
 
 import * as NodeOS from "node:os";
+import { symlink } from "node:fs/promises";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -24,6 +26,22 @@ const MAX_HASH_OFFSET = 3000;
 const MAX_PORT = 65535;
 const DESKTOP_DEV_LOOPBACK_HOST = "127.0.0.1";
 const DEV_PORT_PROBE_HOSTS = ["127.0.0.1", "0.0.0.0", "::1", "::"] as const;
+const DEPENDENCY_LINK_DIRS = [
+  "",
+  "apps/desktop",
+  "apps/marketing",
+  "apps/server",
+  "apps/web",
+  "oxlint-plugin-t3code",
+  "packages/client-runtime",
+  "packages/contracts",
+  "packages/effect-acp",
+  "packages/effect-codex-app-server",
+  "packages/shared",
+  "packages/ssh",
+  "packages/tailscale",
+  "scripts",
+] as const;
 const ACTIVE_EXTENSION_STACK_JSON = Schema.decodeEffect(
   Schema.fromJsonString(
     Schema.Struct({
@@ -230,6 +248,47 @@ function resolveDevRunnerCwd(input: {
     }
 
     return resolvedSourceDir;
+  });
+}
+
+function linkActiveSourceDependencies(input: {
+  readonly baseSourceRoot: string;
+  readonly activeSourceRoot: string;
+}): Effect.Effect<void, DevRunnerError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    yield* Effect.forEach(
+      DEPENDENCY_LINK_DIRS,
+      (relativeDir) =>
+        Effect.gen(function* () {
+          const baseDir = relativeDir
+            ? path.join(input.baseSourceRoot, relativeDir)
+            : input.baseSourceRoot;
+          const target = path.join(baseDir, "node_modules");
+          const targetExists = yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false));
+          if (!targetExists) {
+            return;
+          }
+          const linkParent = relativeDir
+            ? path.join(input.activeSourceRoot, relativeDir)
+            : input.activeSourceRoot;
+          const link = path.join(linkParent, "node_modules");
+          const linkExists = yield* fs.exists(link).pipe(Effect.orElseSucceed(() => false));
+          if (linkExists) {
+            return;
+          }
+          yield* Effect.tryPromise({
+            try: () => symlink(target, link, process.platform === "win32" ? "junction" : "dir"),
+            catch: (cause) =>
+              new DevRunnerError({
+                message: `Failed to link active source dependencies at ${link}.`,
+                cause,
+              }),
+          });
+        }),
+      { concurrency: 4 },
+    );
   });
 }
 
@@ -540,6 +599,10 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
     if (samePath(process.cwd(), runnerCwd)) {
       delete env.T3CODE_EXTENSION_BASE_SOURCE_ROOT;
     } else {
+      yield* linkActiveSourceDependencies({
+        baseSourceRoot: process.cwd(),
+        activeSourceRoot: runnerCwd,
+      });
       env.T3CODE_EXTENSION_BASE_SOURCE_ROOT = process.cwd();
     }
 

@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import { symlink } from "node:fs/promises";
+
 import {
   ExtensionRegistryError,
   ExtensionManifest,
@@ -72,6 +75,22 @@ const decodeActiveStack = Schema.decodeEffect(
   ),
 );
 const DENSE_SIDEBAR_EXTENSION_ID = "t3labs.dense-sidebar";
+const DEPENDENCY_LINK_DIRS = [
+  "",
+  "apps/desktop",
+  "apps/marketing",
+  "apps/server",
+  "apps/web",
+  "oxlint-plugin-t3code",
+  "packages/client-runtime",
+  "packages/contracts",
+  "packages/effect-acp",
+  "packages/effect-codex-app-server",
+  "packages/shared",
+  "packages/ssh",
+  "packages/tailscale",
+  "scripts",
+] as const;
 
 const DENSE_SIDEBAR_MANIFEST_JSON = `{
   "id": "t3labs.dense-sidebar",
@@ -578,6 +597,48 @@ function writeInstallMetadata(input: {
   });
 }
 
+function linkDependencyInstalls(input: {
+  readonly repositoryRoot: string;
+  readonly sourceDir: string;
+}): Effect.Effect<void, ExtensionRegistryError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const pathService = yield* Path.Path;
+    yield* Effect.forEach(
+      DEPENDENCY_LINK_DIRS,
+      (relativeDir) =>
+        Effect.gen(function* () {
+          const baseDir = relativeDir
+            ? pathService.join(input.repositoryRoot, relativeDir)
+            : input.repositoryRoot;
+          const target = pathService.join(baseDir, "node_modules");
+          const exists = yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false));
+          if (!exists) {
+            return;
+          }
+          const linkParent = relativeDir
+            ? pathService.join(input.sourceDir, relativeDir)
+            : input.sourceDir;
+          const link = pathService.join(linkParent, "node_modules");
+          const linkExists = yield* fs.exists(link).pipe(Effect.orElseSucceed(() => false));
+          if (linkExists) {
+            return;
+          }
+          yield* Effect.tryPromise({
+            try: () => symlink(target, link, process.platform === "win32" ? "junction" : "dir"),
+            catch: (cause) =>
+              registryError({
+                path: link,
+                detail: detailWithCause("failed to link extension source dependencies", cause),
+                cause,
+              }),
+          });
+        }),
+      { concurrency: 4 },
+    );
+  });
+}
+
 function copyDraftDirectory(input: {
   readonly fromDir: string;
   readonly toDir: string;
@@ -954,6 +1015,7 @@ function rebuildActiveExtensionStack(
             cause,
           }),
       });
+      yield* linkDependencyInstalls({ repositoryRoot, sourceDir: buildSourceDir });
 
       for (const { entry, patchPath } of enabledEntries) {
         const patchExists = yield* fs.exists(patchPath).pipe(Effect.orElseSucceed(() => false));
@@ -1242,6 +1304,7 @@ export function createExtensionPreviewVariant(
           cause,
         }),
     });
+    yield* linkDependencyInstalls({ repositoryRoot, sourceDir });
     yield* Effect.tryPromise({
       try: () =>
         runProcess("git", ["-c", "core.longpaths=true", "apply", validation.patchPath], {
