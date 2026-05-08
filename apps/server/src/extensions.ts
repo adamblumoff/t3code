@@ -306,6 +306,44 @@ function readUpdatedAt(extensionPath: string) {
   });
 }
 
+function prunePreviewVariants(input: {
+  readonly variantsDir: string;
+  readonly extensionId: string;
+  readonly keepVariantId: string;
+}): Effect.Effect<void, ExtensionRegistryError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const pathService = yield* Path.Path;
+    if (!isSafeExtensionDirectoryName(input.extensionId)) {
+      return yield* registryError({
+        path: input.variantsDir,
+        detail: "extension id cannot be used as a local variant directory name",
+      });
+    }
+    const extensionVariantsDir = pathService.join(input.variantsDir, input.extensionId);
+    const variantIds = yield* readDirectoryNames(extensionVariantsDir);
+    yield* Effect.forEach(
+      variantIds,
+      (variantId) => {
+        if (variantId === input.keepVariantId) {
+          return Effect.void;
+        }
+        const variantDir = pathService.join(extensionVariantsDir, variantId);
+        return fs.remove(variantDir, { recursive: true, force: true }).pipe(
+          Effect.mapError((cause) =>
+            registryError({
+              path: variantDir,
+              detail: "failed to prune stale extension preview variant",
+              cause,
+            }),
+          ),
+        );
+      },
+      { concurrency: 4 },
+    );
+  });
+}
+
 function writeDraftFile(input: {
   readonly path: string;
   readonly contents: string;
@@ -777,6 +815,11 @@ export function createExtensionPreviewVariant(
     yield* writeDraftFile({
       path: manifestPath,
       contents: `${encoded}\n`,
+    });
+    yield* prunePreviewVariants({
+      variantsDir: config.extensionVariantsDir,
+      extensionId,
+      keepVariantId: variantId,
     });
     return variant;
   });

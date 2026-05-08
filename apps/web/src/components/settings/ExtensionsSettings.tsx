@@ -274,7 +274,7 @@ export function ExtensionsSettingsPanel() {
               ...current,
               variants: [
                 variant,
-                ...current.variants.filter((entry) => entry.variantId !== variant.variantId),
+                ...current.variants.filter((entry) => entry.extensionId !== variant.extensionId),
               ],
             }
           : current,
