@@ -17,6 +17,7 @@ import {
   ExtensionPreviewVariantEntry,
   ExtensionRegistry,
   ExtensionRegistryError,
+  ExtensionSetEnabledInput,
   ExtensionValidateDraftInput,
 } from "./extensions.ts";
 import {
@@ -162,6 +163,7 @@ export const WS_METHODS = {
   serverValidateInstalledExtension: "server.validateInstalledExtension",
   serverCreateExtensionPreviewVariant: "server.createExtensionPreviewVariant",
   serverInstallExtensionPreviewVariant: "server.installExtensionPreviewVariant",
+  serverSetExtensionEnabled: "server.setExtensionEnabled",
   serverUninstallExtension: "server.uninstallExtension",
 
   // Source control methods
@@ -293,6 +295,12 @@ export const WsServerInstallExtensionPreviewVariantRpc = Rpc.make(
 
 export const WsServerUninstallExtensionRpc = Rpc.make(WS_METHODS.serverUninstallExtension, {
   payload: ExtensionValidateDraftInput,
+  success: ExtensionRegistry,
+  error: ExtensionRegistryError,
+});
+
+export const WsServerSetExtensionEnabledRpc = Rpc.make(WS_METHODS.serverSetExtensionEnabled, {
+  payload: ExtensionSetEnabledInput,
   success: ExtensionRegistry,
   error: ExtensionRegistryError,
 });
@@ -538,6 +546,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerValidateInstalledExtensionRpc,
   WsServerCreateExtensionPreviewVariantRpc,
   WsServerInstallExtensionPreviewVariantRpc,
+  WsServerSetExtensionEnabledRpc,
   WsServerUninstallExtensionRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,

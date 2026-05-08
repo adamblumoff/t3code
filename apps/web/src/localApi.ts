@@ -183,6 +183,10 @@ function createBrowserLocalApi(rpcClient?: WsRpcClient): LocalApi {
         rpcClient
           ? rpcClient.server.installExtensionPreviewVariant(input)
           : Promise.reject(unavailableLocalBackendError()),
+      setExtensionEnabled: (input) =>
+        rpcClient
+          ? rpcClient.server.setExtensionEnabled(input)
+          : Promise.reject(unavailableLocalBackendError()),
       uninstallExtension: (input) =>
         rpcClient
           ? rpcClient.server.uninstallExtension(input)

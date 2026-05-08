@@ -22,6 +22,7 @@ import { useState } from "react";
 import { ensureLocalApi } from "../../localApi";
 import { Button } from "../ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../ui/empty";
+import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 
@@ -45,9 +46,11 @@ function ExtensionRow({
   validating,
   creatingPreview,
   uninstalling,
+  toggling,
   onValidate,
   onCreatePreview,
   onUninstall,
+  onToggleEnabled,
 }: {
   entry: ExtensionRegistryEntry;
   validation?: ExtensionPatchValidationResult;
@@ -55,9 +58,11 @@ function ExtensionRow({
   validating?: boolean;
   creatingPreview?: boolean;
   uninstalling?: boolean;
+  toggling?: boolean;
   onValidate?: () => void;
   onCreatePreview?: () => void;
   onUninstall?: () => void;
+  onToggleEnabled?: (enabled: boolean) => void;
 }) {
   const baseBuild = entry.manifest.generatedAgainst;
   const baseLabel = [baseBuild?.channel, baseBuild?.version, baseBuild?.gitCommit]
@@ -93,8 +98,16 @@ function ExtensionRow({
         </span>
       }
       control={
-        onValidate || onUninstall ? (
+        onValidate || onUninstall || onToggleEnabled ? (
           <span className="inline-flex items-center gap-1.5">
+            {onToggleEnabled ? (
+              <Switch
+                checked={entry.state === "enabled"}
+                disabled={toggling}
+                onCheckedChange={(checked) => onToggleEnabled(Boolean(checked))}
+                aria-label={`${entry.state === "enabled" ? "Disable" : "Enable"} ${entry.manifest.name}`}
+              />
+            ) : null}
             {onValidate ? (
               <Button size="xs" variant="outline" disabled={validating} onClick={onValidate}>
                 {validation?.valid ? (
@@ -304,7 +317,7 @@ export function ExtensionsSettingsPanel() {
       queryClient.setQueryData(["server", "extensions"], registry);
       toastManager.add({
         title: "Extension installed",
-        description: "The extension is installed and enabled in the local registry.",
+        description: "The extension is installed. Toggle it on to add it to the active stack.",
         type: "success",
       });
     },
@@ -339,6 +352,36 @@ export function ExtensionsSettingsPanel() {
       toastManager.add({
         title: "Unable to uninstall extension",
         description: error instanceof Error ? error.message : "The extension was not removed.",
+        type: "error",
+      });
+    },
+  });
+  const setEnabledMutation = useMutation({
+    mutationFn: (input: { entry: ExtensionRegistryEntry; enabled: boolean }) =>
+      ensureLocalApi().server.setExtensionEnabled({
+        extensionId: input.entry.manifest.id,
+        enabled: input.enabled,
+      }),
+    onSuccess: (registry, input) => {
+      queryClient.setQueryData(["server", "extensions"], registry);
+      setValidationByExtensionId((current) => {
+        const next = { ...current };
+        delete next[input.entry.manifest.id];
+        return next;
+      });
+      toastManager.add({
+        title: input.enabled ? "Extension enabled" : "Extension disabled",
+        description: input.enabled
+          ? "The active extension stack was rebuilt successfully."
+          : "The extension was removed from the active stack.",
+        type: "success",
+      });
+    },
+    onError: (error, input) => {
+      toastManager.add({
+        title: input.enabled ? "Unable to enable extension" : "Unable to disable extension",
+        description:
+          error instanceof Error ? error.message : "The active extension stack was not updated.",
         type: "error",
       });
     },
@@ -415,6 +458,11 @@ export function ExtensionsSettingsPanel() {
                   uninstallMutation.isPending && uninstallMutation.variables?.path === entry.path
                 }
                 onUninstall={() => uninstallMutation.mutate(entry)}
+                toggling={
+                  setEnabledMutation.isPending &&
+                  setEnabledMutation.variables?.entry.path === entry.path
+                }
+                onToggleEnabled={(enabled) => setEnabledMutation.mutate({ entry, enabled })}
               />
             );
           })

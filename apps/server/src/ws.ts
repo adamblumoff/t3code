@@ -58,6 +58,7 @@ import {
   createExtensionPreviewVariant,
   installExtensionPreviewVariant,
   listExtensions,
+  setExtensionEnabled,
   uninstallExtension,
   validateExtensionDraft,
   validateInstalledExtension,
@@ -924,6 +925,14 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
           observeRpcEffect(
             WS_METHODS.serverInstallExtensionPreviewVariant,
             installExtensionPreviewVariant(config, input),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
+        [WS_METHODS.serverSetExtensionEnabled]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverSetExtensionEnabled,
+            setExtensionEnabled(config, input),
             {
               "rpc.aggregate": "server",
             },

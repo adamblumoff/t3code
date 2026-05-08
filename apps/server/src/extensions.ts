@@ -10,6 +10,7 @@ import {
   type ExtensionPreviewVariantEntry as ExtensionPreviewVariantEntryType,
   type ExtensionRegistry,
   type ExtensionRegistryEntry,
+  type ExtensionSetEnabledInput,
   type ExtensionValidateDraftInput,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
@@ -36,6 +37,27 @@ const encodeInstallMetadata = Schema.encodeEffect(
       sourceVariantId: Schema.String,
       sourceVariantPath: Schema.String,
       baseGitCommit: Schema.optional(Schema.String),
+      enabled: Schema.optional(Schema.Boolean),
+    }),
+  ),
+);
+const decodeInstallMetadata = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      installedAt: Schema.optional(Schema.String),
+      sourceVariantId: Schema.optional(Schema.String),
+      sourceVariantPath: Schema.optional(Schema.String),
+      baseGitCommit: Schema.optional(Schema.String),
+      enabled: Schema.optional(Schema.Boolean),
+    }),
+  ),
+);
+const encodeActiveStack = Schema.encodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      builtAt: Schema.String,
+      sourceDir: Schema.String,
+      enabledExtensionIds: Schema.Array(Schema.String),
     }),
   ),
 );
@@ -210,6 +232,18 @@ function resolveInstalledPaths(
   });
 }
 
+function resolveActivePaths(config: Pick<ServerConfigShape, "extensionInstalledDir">) {
+  return Effect.gen(function* () {
+    const pathService = yield* Path.Path;
+    const activeDir = pathService.join(pathService.dirname(config.extensionInstalledDir), "active");
+    return {
+      activeDir,
+      sourceDir: pathService.join(activeDir, "source"),
+      stackPath: pathService.join(activeDir, "stack.json"),
+    };
+  });
+}
+
 function resolveVariantPaths(
   config: Pick<ServerConfigShape, "extensionVariantsDir">,
   input: {
@@ -298,6 +332,34 @@ function readPreviewVariant(manifestPath: string) {
   );
 }
 
+function readInstallMetadata(metadataPath: string) {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const exists = yield* fs.exists(metadataPath).pipe(Effect.orElseSucceed(() => false));
+    if (!exists) {
+      return {};
+    }
+    const raw = yield* fs.readFileString(metadataPath).pipe(
+      Effect.mapError((cause) =>
+        registryError({
+          path: metadataPath,
+          detail: "failed to read extension install metadata",
+          cause,
+        }),
+      ),
+    );
+    return yield* decodeInstallMetadata(raw).pipe(
+      Effect.mapError((cause) =>
+        registryError({
+          path: metadataPath,
+          detail: "extension install metadata does not match the v0 schema",
+          cause,
+        }),
+      ),
+    );
+  });
+}
+
 function readUpdatedAt(extensionPath: string) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -369,6 +431,37 @@ function writeDraftFile(input: {
         }),
       ),
     );
+  });
+}
+
+function writeInstallMetadata(input: {
+  readonly path: string;
+  readonly installedAt: string;
+  readonly sourceVariantId?: string;
+  readonly sourceVariantPath?: string;
+  readonly baseGitCommit?: string;
+  readonly enabled: boolean;
+}): Effect.Effect<void, ExtensionRegistryError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const encoded = yield* encodeInstallMetadata({
+      installedAt: input.installedAt,
+      sourceVariantId: input.sourceVariantId ?? "",
+      sourceVariantPath: input.sourceVariantPath ?? "",
+      ...(input.baseGitCommit ? { baseGitCommit: input.baseGitCommit } : {}),
+      enabled: input.enabled,
+    }).pipe(
+      Effect.mapError((cause) =>
+        registryError({
+          path: input.path,
+          detail: "failed to encode extension install metadata",
+          cause,
+        }),
+      ),
+    );
+    yield* writeDraftFile({
+      path: input.path,
+      contents: `${encoded}\n`,
+    });
   });
 }
 
@@ -466,11 +559,20 @@ function readEntries(input: {
             const pathService = yield* Path.Path;
             const extensionPath = pathService.join(input.directoryPath, directoryName);
             const manifestPath = pathService.join(extensionPath, "manifest.json");
-            const state = input.kind === "draft" ? "draft" : "enabled";
             const { manifest, updatedAt } = yield* Effect.all({
               manifest: readManifest(manifestPath),
               updatedAt: readUpdatedAt(extensionPath),
             });
+            const installMetadata =
+              input.kind === "installed"
+                ? yield* readInstallMetadata(pathService.join(extensionPath, "installed.json"))
+                : undefined;
+            const state =
+              input.kind === "draft"
+                ? "draft"
+                : installMetadata?.enabled === false
+                  ? "disabled"
+                  : "enabled";
             return {
               kind: input.kind,
               state,
@@ -573,6 +675,169 @@ export function createExtensionDraft(
         break;
     }
     return yield* listExtensions(config);
+  });
+}
+
+function readInstalledPatchEntries(
+  config: Pick<ServerConfigShape, "extensionInstalledDir">,
+): Effect.Effect<
+  {
+    readonly entry: ExtensionRegistryEntry;
+    readonly patchPath: string;
+    readonly installMetadataPath: string;
+  }[],
+  ExtensionRegistryError,
+  FileSystem.FileSystem | Path.Path
+> {
+  return Effect.gen(function* () {
+    const pathService = yield* Path.Path;
+    const installed = yield* readEntries({
+      directoryPath: config.extensionInstalledDir,
+      kind: "installed",
+    });
+    return installed
+      .map((entry) => ({
+        entry,
+        patchPath: pathService.join(entry.path, "patches", "app.patch"),
+        installMetadataPath: pathService.join(entry.path, "installed.json"),
+      }))
+      .toSorted((left, right) => left.entry.manifest.id.localeCompare(right.entry.manifest.id));
+  });
+}
+
+function rebuildActiveExtensionStack(
+  config: Pick<ServerConfigShape, "cwd" | "extensionInstalledDir">,
+  input: {
+    readonly extensionId: string;
+    readonly enabled: boolean;
+  },
+): Effect.Effect<void, ExtensionRegistryError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const pathService = yield* Path.Path;
+    const repositoryRoot = yield* resolveGitRoot(config);
+    const activePaths = yield* resolveActivePaths(config);
+    const buildId = `build-${DateTime.formatIso(yield* DateTime.now)
+      .replace(/[^0-9a-z]/gi, "")
+      .toLowerCase()}`;
+    const buildDir = pathService.join(activePaths.activeDir, buildId);
+    const buildSourceDir = pathService.join(buildDir, "source");
+    const installedEntries = yield* readInstalledPatchEntries(config);
+    const enabledEntries = installedEntries.filter(({ entry }) =>
+      entry.manifest.id === input.extensionId ? input.enabled : entry.state === "enabled",
+    );
+
+    const build = Effect.gen(function* () {
+      yield* fs.makeDirectory(buildDir, { recursive: true }).pipe(
+        Effect.mapError((cause) =>
+          registryError({
+            path: buildDir,
+            detail: "failed to prepare active extension build directory",
+            cause,
+          }),
+        ),
+      );
+      yield* Effect.tryPromise({
+        try: () =>
+          runProcess(
+            "git",
+            [
+              "-c",
+              "core.longpaths=true",
+              "clone",
+              "--no-hardlinks",
+              "--local",
+              repositoryRoot,
+              buildSourceDir,
+            ],
+            {
+              cwd: repositoryRoot,
+              outputMode: "truncate",
+              maxBufferBytes: 64 * 1024,
+              timeoutMs: 60_000,
+            },
+          ),
+        catch: (cause) =>
+          registryError({
+            path: buildSourceDir,
+            detail: detailWithCause("failed to materialize active extension source", cause),
+            cause,
+          }),
+      });
+
+      for (const { entry, patchPath } of enabledEntries) {
+        const patchExists = yield* fs.exists(patchPath).pipe(Effect.orElseSucceed(() => false));
+        if (!patchExists) {
+          return yield* registryError({
+            path: patchPath,
+            detail: `${entry.manifest.name} does not include patches/app.patch`,
+          });
+        }
+        yield* Effect.tryPromise({
+          try: () =>
+            runProcess("git", ["-c", "core.longpaths=true", "apply", patchPath], {
+              cwd: buildSourceDir,
+              outputMode: "truncate",
+              maxBufferBytes: 64 * 1024,
+              timeoutMs: 15_000,
+            }),
+          catch: (cause) =>
+            registryError({
+              path: patchPath,
+              detail: detailWithCause(`failed to apply ${entry.manifest.name}`, cause),
+              cause,
+            }),
+        });
+      }
+
+      const stack = yield* encodeActiveStack({
+        builtAt: DateTime.formatIso(yield* DateTime.now),
+        sourceDir: activePaths.sourceDir,
+        enabledExtensionIds: enabledEntries.map(({ entry }) => entry.manifest.id),
+      }).pipe(
+        Effect.mapError((cause) =>
+          registryError({
+            path: activePaths.stackPath,
+            detail: "failed to encode active extension stack metadata",
+            cause,
+          }),
+        ),
+      );
+      yield* fs.remove(activePaths.sourceDir, { recursive: true, force: true }).pipe(
+        Effect.mapError((cause) =>
+          registryError({
+            path: activePaths.sourceDir,
+            detail: "failed to replace active extension source",
+            cause,
+          }),
+        ),
+      );
+      yield* fs.rename(buildSourceDir, activePaths.sourceDir).pipe(
+        Effect.mapError((cause) =>
+          registryError({
+            path: activePaths.sourceDir,
+            detail: "failed to publish active extension source",
+            cause,
+          }),
+        ),
+      );
+      yield* writeDraftFile({
+        path: activePaths.stackPath,
+        contents: `${stack}\n`,
+      });
+    });
+
+    yield* build.pipe(
+      Effect.catch((error) =>
+        fs.remove(buildDir, { recursive: true, force: true }).pipe(
+          Effect.catch(() => Effect.void),
+          Effect.andThen(Effect.fail(error)),
+        ),
+      ),
+      Effect.andThen(
+        fs.remove(buildDir, { recursive: true, force: true }).pipe(Effect.catch(() => Effect.void)),
+      ),
+    );
   });
 }
 
@@ -875,25 +1140,54 @@ export function installExtensionPreviewVariant(
       ),
     );
     yield* copyDraftDirectory({ fromDir: draftDir, toDir: installedDir });
-    const encodedInstallMetadata = yield* encodeInstallMetadata({
+    yield* writeInstallMetadata({
+      path: installMetadataPath,
       installedAt: DateTime.formatIso(now),
       sourceVariantId: variant.variantId,
       sourceVariantPath: variant.path,
       ...(variant.baseGitCommit ? { baseGitCommit: variant.baseGitCommit } : {}),
-    }).pipe(
-      Effect.mapError((cause) =>
-        registryError({
-          path: installMetadataPath,
-          detail: "failed to encode extension install metadata",
-          cause,
-        }),
-      ),
-    );
-    yield* writeDraftFile({
-      path: installMetadataPath,
-      contents: `${encodedInstallMetadata}\n`,
+      enabled: false,
     });
 
+    return yield* listExtensions(config);
+  });
+}
+
+export function setExtensionEnabled(
+  config: Pick<
+    ServerConfigShape,
+    "cwd" | "extensionDraftsDir" | "extensionInstalledDir" | "extensionVariantsDir"
+  >,
+  input: ExtensionSetEnabledInput,
+): Effect.Effect<ExtensionRegistry, ExtensionRegistryError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const now = yield* DateTime.now;
+    const { installedDir, installMetadataPath } = yield* resolveInstalledPaths(
+      config,
+      input.extensionId,
+    );
+    const installedExists = yield* fs.exists(installedDir).pipe(Effect.orElseSucceed(() => false));
+    if (!installedExists) {
+      return yield* registryError({
+        path: installedDir,
+        detail: "installed extension does not exist",
+      });
+    }
+    const metadata = yield* readInstallMetadata(installMetadataPath);
+    if (metadata.enabled === input.enabled) {
+      return yield* listExtensions(config);
+    }
+
+    yield* rebuildActiveExtensionStack(config, input);
+    yield* writeInstallMetadata({
+      path: installMetadataPath,
+      installedAt: metadata.installedAt ?? DateTime.formatIso(now),
+      ...(metadata.sourceVariantId ? { sourceVariantId: metadata.sourceVariantId } : {}),
+      ...(metadata.sourceVariantPath ? { sourceVariantPath: metadata.sourceVariantPath } : {}),
+      ...(metadata.baseGitCommit ? { baseGitCommit: metadata.baseGitCommit } : {}),
+      enabled: input.enabled,
+    });
     return yield* listExtensions(config);
   });
 }

@@ -147,6 +147,7 @@ export interface WsRpcClient {
     readonly installExtensionPreviewVariant: RpcUnaryMethod<
       typeof WS_METHODS.serverInstallExtensionPreviewVariant
     >;
+    readonly setExtensionEnabled: RpcUnaryMethod<typeof WS_METHODS.serverSetExtensionEnabled>;
     readonly uninstallExtension: RpcUnaryMethod<typeof WS_METHODS.serverUninstallExtension>;
     readonly subscribeConfig: RpcStreamMethod<typeof WS_METHODS.subscribeServerConfig>;
     readonly subscribeLifecycle: RpcStreamMethod<typeof WS_METHODS.subscribeServerLifecycle>;
@@ -294,6 +295,8 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) =>
           client[WS_METHODS.serverInstallExtensionPreviewVariant](input),
         ),
+      setExtensionEnabled: (input) =>
+        transport.request((client) => client[WS_METHODS.serverSetExtensionEnabled](input)),
       uninstallExtension: (input) =>
         transport.request((client) => client[WS_METHODS.serverUninstallExtension](input)),
       subscribeConfig: (listener, options) =>

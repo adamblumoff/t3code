@@ -26,6 +26,7 @@ import type {
   ExtensionPatchValidationResult,
   ExtensionPreviewVariantEntry,
   ExtensionRegistry,
+  ExtensionSetEnabledInput,
   ExtensionValidateDraftInput,
 } from "./extensions.ts";
 import type {
@@ -498,6 +499,7 @@ export interface LocalApi {
     installExtensionPreviewVariant: (
       input: ExtensionInstallPreviewVariantInput,
     ) => Promise<ExtensionRegistry>;
+    setExtensionEnabled: (input: ExtensionSetEnabledInput) => Promise<ExtensionRegistry>;
     uninstallExtension: (input: ExtensionValidateDraftInput) => Promise<ExtensionRegistry>;
   };
 }
