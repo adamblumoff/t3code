@@ -138,6 +138,9 @@ export interface WsRpcClient {
     readonly listExtensions: RpcUnaryNoArgMethod<typeof WS_METHODS.serverListExtensions>;
     readonly createExtensionDraft: RpcUnaryMethod<typeof WS_METHODS.serverCreateExtensionDraft>;
     readonly validateExtensionDraft: RpcUnaryMethod<typeof WS_METHODS.serverValidateExtensionDraft>;
+    readonly createExtensionPreviewVariant: RpcUnaryMethod<
+      typeof WS_METHODS.serverCreateExtensionPreviewVariant
+    >;
     readonly subscribeConfig: RpcStreamMethod<typeof WS_METHODS.subscribeServerConfig>;
     readonly subscribeLifecycle: RpcStreamMethod<typeof WS_METHODS.subscribeServerLifecycle>;
     readonly subscribeAuthAccess: RpcStreamMethod<typeof WS_METHODS.subscribeAuthAccess>;
@@ -274,6 +277,10 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.serverCreateExtensionDraft](input)),
       validateExtensionDraft: (input) =>
         transport.request((client) => client[WS_METHODS.serverValidateExtensionDraft](input)),
+      createExtensionPreviewVariant: (input) =>
+        transport.request((client) =>
+          client[WS_METHODS.serverCreateExtensionPreviewVariant](input),
+        ),
       subscribeConfig: (listener, options) =>
         transport.subscribe((client) => client[WS_METHODS.subscribeServerConfig]({}), listener, {
           ...options,

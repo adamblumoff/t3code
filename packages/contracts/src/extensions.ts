@@ -46,15 +46,6 @@ export const ExtensionRegistryEntry = Schema.Struct({
 });
 export type ExtensionRegistryEntry = typeof ExtensionRegistryEntry.Type;
 
-export const ExtensionRegistry = Schema.Struct({
-  installedDir: TrimmedNonEmptyString,
-  draftsDir: TrimmedNonEmptyString,
-  variantsDir: TrimmedNonEmptyString,
-  installed: Schema.Array(ExtensionRegistryEntry),
-  drafts: Schema.Array(ExtensionRegistryEntry),
-});
-export type ExtensionRegistry = typeof ExtensionRegistry.Type;
-
 export const ExtensionDraftTemplateId = Schema.Literal("dense-sidebar");
 export type ExtensionDraftTemplateId = typeof ExtensionDraftTemplateId.Type;
 
@@ -76,6 +67,37 @@ export const ExtensionPatchValidationResult = Schema.Struct({
   checkedAt: IsoDateTime,
 });
 export type ExtensionPatchValidationResult = typeof ExtensionPatchValidationResult.Type;
+
+export const ExtensionPreviewVariantStatus = Schema.Literals(["ready", "failed"]);
+export type ExtensionPreviewVariantStatus = typeof ExtensionPreviewVariantStatus.Type;
+
+export const ExtensionPreviewVariantEntry = Schema.Struct({
+  extensionId: ExtensionId,
+  variantId: TrimmedNonEmptyString,
+  path: TrimmedNonEmptyString,
+  sourceDir: TrimmedNonEmptyString,
+  patchPath: TrimmedNonEmptyString,
+  status: ExtensionPreviewVariantStatus,
+  detail: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+  baseGitCommit: Schema.optional(TrimmedNonEmptyString),
+});
+export type ExtensionPreviewVariantEntry = typeof ExtensionPreviewVariantEntry.Type;
+
+export const ExtensionRegistry = Schema.Struct({
+  installedDir: TrimmedNonEmptyString,
+  draftsDir: TrimmedNonEmptyString,
+  variantsDir: TrimmedNonEmptyString,
+  installed: Schema.Array(ExtensionRegistryEntry),
+  drafts: Schema.Array(ExtensionRegistryEntry),
+  variants: Schema.Array(ExtensionPreviewVariantEntry),
+});
+export type ExtensionRegistry = typeof ExtensionRegistry.Type;
+
+export const ExtensionCreatePreviewVariantInput = Schema.Struct({
+  extensionId: ExtensionId,
+});
+export type ExtensionCreatePreviewVariantInput = typeof ExtensionCreatePreviewVariantInput.Type;
 
 export class ExtensionRegistryError extends Schema.TaggedErrorClass<ExtensionRegistryError>()(
   "ExtensionRegistryError",

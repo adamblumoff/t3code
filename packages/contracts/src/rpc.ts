@@ -11,7 +11,9 @@ import {
 } from "./filesystem.ts";
 import {
   ExtensionCreateDraftInput,
+  ExtensionCreatePreviewVariantInput,
   ExtensionPatchValidationResult,
+  ExtensionPreviewVariantEntry,
   ExtensionRegistry,
   ExtensionRegistryError,
   ExtensionValidateDraftInput,
@@ -156,6 +158,7 @@ export const WS_METHODS = {
   serverListExtensions: "server.listExtensions",
   serverCreateExtensionDraft: "server.createExtensionDraft",
   serverValidateExtensionDraft: "server.validateExtensionDraft",
+  serverCreateExtensionPreviewVariant: "server.createExtensionPreviewVariant",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -256,6 +259,15 @@ export const WsServerValidateExtensionDraftRpc = Rpc.make(WS_METHODS.serverValid
   success: ExtensionPatchValidationResult,
   error: ExtensionRegistryError,
 });
+
+export const WsServerCreateExtensionPreviewVariantRpc = Rpc.make(
+  WS_METHODS.serverCreateExtensionPreviewVariant,
+  {
+    payload: ExtensionCreatePreviewVariantInput,
+    success: ExtensionPreviewVariantEntry,
+    error: ExtensionRegistryError,
+  },
+);
 
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
   WS_METHODS.sourceControlLookupRepository,
@@ -495,6 +507,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerListExtensionsRpc,
   WsServerCreateExtensionDraftRpc,
   WsServerValidateExtensionDraftRpc,
+  WsServerCreateExtensionPreviewVariantRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,

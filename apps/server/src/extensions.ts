@@ -1,9 +1,12 @@
 import {
   ExtensionRegistryError,
   ExtensionManifest,
+  ExtensionPreviewVariantEntry,
   type ExtensionCreateDraftInput,
+  type ExtensionCreatePreviewVariantInput,
   type ExtensionKind,
   type ExtensionPatchValidationResult,
+  type ExtensionPreviewVariantEntry as ExtensionPreviewVariantEntryType,
   type ExtensionRegistry,
   type ExtensionRegistryEntry,
   type ExtensionValidateDraftInput,
@@ -19,6 +22,12 @@ import type { ServerConfigShape } from "./config.ts";
 import { runProcess } from "./processRunner.ts";
 
 const decodeManifest = Schema.decodeEffect(Schema.fromJsonString(ExtensionManifest));
+const decodePreviewVariant = Schema.decodeEffect(
+  Schema.fromJsonString(ExtensionPreviewVariantEntry),
+);
+const encodePreviewVariant = Schema.encodeEffect(
+  Schema.fromJsonString(ExtensionPreviewVariantEntry),
+);
 const DENSE_SIDEBAR_EXTENSION_ID = "t3labs.dense-sidebar";
 
 const DENSE_SIDEBAR_MANIFEST_JSON = `{
@@ -128,6 +137,40 @@ function resolveDraftPaths(
   });
 }
 
+function resolveVariantPaths(
+  config: Pick<ServerConfigShape, "extensionVariantsDir">,
+  input: {
+    readonly extensionId: string;
+    readonly variantId: string;
+  },
+) {
+  return Effect.gen(function* () {
+    const pathService = yield* Path.Path;
+    if (!isSafeExtensionDirectoryName(input.extensionId)) {
+      return yield* registryError({
+        path: config.extensionVariantsDir,
+        detail: "extension id cannot be used as a local variant directory name",
+      });
+    }
+    if (!isSafeExtensionDirectoryName(input.variantId)) {
+      return yield* registryError({
+        path: config.extensionVariantsDir,
+        detail: "variant id cannot be used as a local variant directory name",
+      });
+    }
+    const variantDir = pathService.join(
+      config.extensionVariantsDir,
+      input.extensionId,
+      input.variantId,
+    );
+    return {
+      variantDir,
+      sourceDir: pathService.join(variantDir, "source"),
+      manifestPath: pathService.join(variantDir, "variant.json"),
+    };
+  });
+}
+
 function readManifest(manifestPath: string) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -147,6 +190,33 @@ function readManifest(manifestPath: string) {
           registryError({
             path: manifestPath,
             detail: "extension manifest does not match the v0 schema",
+            cause,
+          }),
+        ),
+      ),
+    ),
+  );
+}
+
+function readPreviewVariant(manifestPath: string) {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    return yield* fs.readFileString(manifestPath).pipe(
+      Effect.mapError((cause) =>
+        registryError({
+          path: manifestPath,
+          detail: "failed to read extension preview variant manifest",
+          cause,
+        }),
+      ),
+    );
+  }).pipe(
+    Effect.flatMap((raw) =>
+      decodePreviewVariant(raw).pipe(
+        Effect.mapError((cause) =>
+          registryError({
+            path: manifestPath,
+            detail: "extension preview variant manifest does not match the v0 schema",
             cause,
           }),
         ),
@@ -248,6 +318,52 @@ function readEntries(input: {
   );
 }
 
+function readVariantEntries(
+  variantsDir: string,
+): Effect.Effect<
+  ExtensionPreviewVariantEntryType[],
+  ExtensionRegistryError,
+  FileSystem.FileSystem | Path.Path
+> {
+  return readDirectoryNames(variantsDir).pipe(
+    Effect.flatMap((extensionIds) =>
+      Effect.forEach(
+        extensionIds,
+        (extensionId) =>
+          Effect.gen(function* () {
+            const pathService = yield* Path.Path;
+            const extensionVariantsDir = pathService.join(variantsDir, extensionId);
+            const variantIds = yield* readDirectoryNames(extensionVariantsDir);
+            return yield* Effect.forEach(
+              variantIds,
+              (variantId) =>
+                Effect.gen(function* () {
+                  const fs = yield* FileSystem.FileSystem;
+                  const manifestPath = pathService.join(
+                    extensionVariantsDir,
+                    variantId,
+                    "variant.json",
+                  );
+                  const exists = yield* fs
+                    .exists(manifestPath)
+                    .pipe(Effect.orElseSucceed(() => false));
+                  if (!exists) {
+                    return [];
+                  }
+                  return [yield* readPreviewVariant(manifestPath)];
+                }),
+              { concurrency: 4 },
+            ).pipe(Effect.map((entries) => entries.flat()));
+          }),
+        { concurrency: 4 },
+      ).pipe(Effect.map((entries) => entries.flat())),
+    ),
+    Effect.map((entries) =>
+      entries.toSorted((left, right) => right.createdAt.localeCompare(left.createdAt)),
+    ),
+  );
+}
+
 export function listExtensions(
   config: Pick<
     ServerConfigShape,
@@ -263,13 +379,15 @@ export function listExtensions(
       directoryPath: config.extensionDraftsDir,
       kind: "draft",
     }),
+    variants: readVariantEntries(config.extensionVariantsDir),
   }).pipe(
-    Effect.map(({ installed, drafts }) => ({
+    Effect.map(({ installed, drafts, variants }) => ({
       installedDir: config.extensionInstalledDir,
       draftsDir: config.extensionDraftsDir,
       variantsDir: config.extensionVariantsDir,
       installed,
       drafts,
+      variants,
     })),
   );
 }
@@ -346,5 +464,113 @@ export function validateExtensionDraft(
       detail,
       checkedAt: DateTime.formatIso(yield* DateTime.now),
     };
+  });
+}
+
+export function createExtensionPreviewVariant(
+  config: Pick<ServerConfigShape, "cwd" | "extensionDraftsDir" | "extensionVariantsDir">,
+  input: ExtensionCreatePreviewVariantInput,
+): Effect.Effect<
+  ExtensionPreviewVariantEntryType,
+  ExtensionRegistryError,
+  FileSystem.FileSystem | Path.Path
+> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const now = yield* DateTime.now;
+    const extensionId = input.extensionId;
+    const validation = yield* validateExtensionDraft(config, { extensionId });
+    if (!validation.valid) {
+      return yield* registryError({
+        path: validation.patchPath,
+        detail: validation.detail,
+      });
+    }
+
+    const variantId = `preview-${DateTime.formatIso(now)
+      .replace(/[^0-9a-z]/gi, "")
+      .toLowerCase()}`;
+    const { variantDir, sourceDir, manifestPath } = yield* resolveVariantPaths(config, {
+      extensionId,
+      variantId,
+    });
+    yield* fs.makeDirectory(variantDir, { recursive: true }).pipe(
+      Effect.mapError((cause) =>
+        registryError({
+          path: variantDir,
+          detail: "failed to prepare extension preview variant directory",
+          cause,
+        }),
+      ),
+    );
+
+    const revParseResult = yield* Effect.tryPromise(() =>
+      runProcess("git", ["rev-parse", "HEAD"], {
+        cwd: config.cwd,
+        allowNonZeroExit: true,
+        outputMode: "truncate",
+        maxBufferBytes: 4 * 1024,
+        timeoutMs: 10_000,
+      }),
+    ).pipe(Effect.orElseSucceed(() => undefined));
+    const baseGitCommit =
+      revParseResult && revParseResult.code === 0 ? revParseResult.stdout.trim() : undefined;
+
+    yield* Effect.tryPromise({
+      try: () =>
+        runProcess("git", ["clone", "--no-hardlinks", "--local", config.cwd, sourceDir], {
+          cwd: config.cwd,
+          outputMode: "truncate",
+          maxBufferBytes: 64 * 1024,
+          timeoutMs: 60_000,
+        }),
+      catch: (cause) =>
+        registryError({
+          path: sourceDir,
+          detail: "failed to materialize extension preview source",
+          cause,
+        }),
+    });
+    yield* Effect.tryPromise({
+      try: () =>
+        runProcess("git", ["apply", validation.patchPath], {
+          cwd: sourceDir,
+          outputMode: "truncate",
+          maxBufferBytes: 64 * 1024,
+          timeoutMs: 15_000,
+        }),
+      catch: (cause) =>
+        registryError({
+          path: validation.patchPath,
+          detail: "failed to apply extension patch to preview variant",
+          cause,
+        }),
+    });
+
+    const variant = {
+      extensionId,
+      variantId,
+      path: variantDir,
+      sourceDir,
+      patchPath: validation.patchPath,
+      status: "ready",
+      detail: "Preview source variant is ready.",
+      createdAt: DateTime.formatIso(now),
+      ...(baseGitCommit ? { baseGitCommit } : {}),
+    } satisfies ExtensionPreviewVariantEntryType;
+    const encoded = yield* encodePreviewVariant(variant).pipe(
+      Effect.mapError((cause) =>
+        registryError({
+          path: manifestPath,
+          detail: "failed to encode extension preview variant manifest",
+          cause,
+        }),
+      ),
+    );
+    yield* writeDraftFile({
+      path: manifestPath,
+      contents: `${encoded}\n`,
+    });
+    return variant;
   });
 }

@@ -1,6 +1,7 @@
 import {
   CheckCircleIcon,
   CircleAlertIcon,
+  EyeIcon,
   PackageIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -8,7 +9,12 @@ import {
   WrenchIcon,
 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ExtensionPatchValidationResult, ExtensionRegistryEntry } from "@t3tools/contracts";
+import type {
+  ExtensionPatchValidationResult,
+  ExtensionPreviewVariantEntry,
+  ExtensionRegistry,
+  ExtensionRegistryEntry,
+} from "@t3tools/contracts";
 import { useState } from "react";
 
 import { ensureLocalApi } from "../../localApi";
@@ -33,13 +39,19 @@ function extensionStateLabel(entry: ExtensionRegistryEntry): string {
 function ExtensionRow({
   entry,
   validation,
+  preview,
   validating,
+  creatingPreview,
   onValidate,
+  onCreatePreview,
 }: {
   entry: ExtensionRegistryEntry;
   validation?: ExtensionPatchValidationResult;
+  preview?: ExtensionPreviewVariantEntry;
   validating?: boolean;
+  creatingPreview?: boolean;
   onValidate?: () => void;
+  onCreatePreview?: () => void;
 }) {
   const baseBuild = entry.manifest.generatedAgainst;
   const baseLabel = [baseBuild?.channel, baseBuild?.version, baseBuild?.gitCommit]
@@ -50,6 +62,7 @@ function ExtensionRow({
       ? "Patch applies"
       : "Patch conflict"
     : null;
+  const previewLabel = preview ? "Preview ready" : null;
   return (
     <SettingsRow
       title={entry.manifest.name}
@@ -67,6 +80,7 @@ function ExtensionRow({
               {validationLabel}
             </span>
           ) : null}
+          {previewLabel ? <span className="text-success">{previewLabel}</span> : null}
           {baseLabel ? (
             <span className="min-w-0 truncate text-muted-foreground/50">{baseLabel}</span>
           ) : null}
@@ -74,21 +88,58 @@ function ExtensionRow({
       }
       control={
         onValidate ? (
-          <Button size="xs" variant="outline" disabled={validating} onClick={onValidate}>
-            {validation?.valid ? (
-              <CheckCircleIcon className="size-3.5 text-success" />
-            ) : validation ? (
-              <CircleAlertIcon className="size-3.5 text-destructive" />
-            ) : (
-              <ShieldCheckIcon className="size-3.5" />
-            )}
-            {validating ? "Checking" : validation ? "Recheck" : "Validate"}
-          </Button>
+          <span className="inline-flex items-center gap-1.5">
+            <Button size="xs" variant="outline" disabled={validating} onClick={onValidate}>
+              {validation?.valid ? (
+                <CheckCircleIcon className="size-3.5 text-success" />
+              ) : validation ? (
+                <CircleAlertIcon className="size-3.5 text-destructive" />
+              ) : (
+                <ShieldCheckIcon className="size-3.5" />
+              )}
+              {validating ? "Checking" : validation ? "Recheck" : "Validate"}
+            </Button>
+            {onCreatePreview ? (
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={creatingPreview}
+                onClick={onCreatePreview}
+              >
+                <EyeIcon className="size-3.5" />
+                {creatingPreview ? "Creating" : preview ? "Recreate" : "Preview"}
+              </Button>
+            ) : null}
+          </span>
         ) : (
           <code className="max-w-54 truncate rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
             {entry.manifest.id}
           </code>
         )
+      }
+    />
+  );
+}
+
+function VariantRow({ variant }: { variant: ExtensionPreviewVariantEntry }) {
+  return (
+    <SettingsRow
+      title={variant.extensionId}
+      description={variant.detail}
+      status={
+        <span className="inline-flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+          <span className={variant.status === "ready" ? "text-success" : "text-destructive"}>
+            {variant.status === "ready" ? "Preview ready" : "Preview failed"}
+          </span>
+          {variant.baseGitCommit ? (
+            <span className="text-muted-foreground/50">{variant.baseGitCommit.slice(0, 8)}</span>
+          ) : null}
+        </span>
+      }
+      control={
+        <code className="max-w-54 truncate rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+          {variant.variantId}
+        </code>
       }
     />
   );
@@ -147,10 +198,49 @@ export function ExtensionsSettingsPanel() {
       });
     },
   });
+  const createPreviewMutation = useMutation({
+    mutationFn: (entry: ExtensionRegistryEntry) =>
+      ensureLocalApi().server.createExtensionPreviewVariant({
+        extensionId: entry.manifest.id,
+      }),
+    onSuccess: (variant) => {
+      queryClient.setQueryData<ExtensionRegistry>(["server", "extensions"], (current) =>
+        current
+          ? {
+              ...current,
+              variants: [
+                variant,
+                ...current.variants.filter((entry) => entry.variantId !== variant.variantId),
+              ],
+            }
+          : current,
+      );
+      toastManager.add({
+        title: "Preview ready",
+        description: "The extension patch was applied to an isolated source variant.",
+        type: "success",
+      });
+    },
+    onError: (error) => {
+      toastManager.add({
+        title: "Unable to create preview",
+        description:
+          error instanceof Error ? error.message : "The extension preview variant was not created.",
+        type: "error",
+      });
+    },
+  });
   const registry = extensionsQuery.data;
   const installed = registry?.installed ?? [];
   const drafts = registry?.drafts ?? [];
-  const isEmpty = installed.length === 0 && drafts.length === 0;
+  const variants = registry?.variants ?? [];
+  const latestVariantByExtensionId = new Map<string, ExtensionPreviewVariantEntry>();
+  for (const variant of variants) {
+    if (!latestVariantByExtensionId.has(variant.extensionId)) {
+      latestVariantByExtensionId.set(variant.extensionId, variant);
+    }
+  }
+  const isEmpty = installed.length === 0 && drafts.length === 0 && variants.length === 0;
 
   return (
     <SettingsPageContainer>
@@ -213,16 +303,23 @@ export function ExtensionsSettingsPanel() {
         {drafts.length > 0 ? (
           drafts.map((entry) => {
             const validation = validationByExtensionId[entry.manifest.id];
+            const preview = latestVariantByExtensionId.get(entry.manifest.id);
             return (
               <ExtensionRow
                 key={entry.path}
                 entry={entry}
                 {...(validation ? { validation } : {})}
+                {...(preview ? { preview } : {})}
                 validating={
                   validateDraftMutation.isPending &&
                   validateDraftMutation.variables?.path === entry.path
                 }
                 onValidate={() => validateDraftMutation.mutate(entry)}
+                creatingPreview={
+                  createPreviewMutation.isPending &&
+                  createPreviewMutation.variables?.path === entry.path
+                }
+                onCreatePreview={() => createPreviewMutation.mutate(entry)}
               />
             );
           })
@@ -254,11 +351,17 @@ export function ExtensionsSettingsPanel() {
 
       {isEmpty ? null : (
         <SettingsSection title="Variants">
-          <SettingsRow
-            title="Active recipe"
-            description="Variant build and preview controls will land after the local registry is wired."
-            status={registry ? `Variants: ${registry.variantsDir}` : undefined}
-          />
+          {variants.length > 0 ? (
+            variants.map((variant) => (
+              <VariantRow key={`${variant.extensionId}:${variant.variantId}`} variant={variant} />
+            ))
+          ) : (
+            <SettingsRow
+              title="No preview variants"
+              description="Validated draft extensions can create isolated preview source variants."
+              status={registry ? `Variants: ${registry.variantsDir}` : undefined}
+            />
+          )}
         </SettingsSection>
       )}
     </SettingsPageContainer>

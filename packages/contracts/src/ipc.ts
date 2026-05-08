@@ -21,7 +21,9 @@ import type {
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem.ts";
 import type {
   ExtensionCreateDraftInput,
+  ExtensionCreatePreviewVariantInput,
   ExtensionPatchValidationResult,
+  ExtensionPreviewVariantEntry,
   ExtensionRegistry,
   ExtensionValidateDraftInput,
 } from "./extensions.ts";
@@ -486,6 +488,9 @@ export interface LocalApi {
     validateExtensionDraft: (
       input: ExtensionValidateDraftInput,
     ) => Promise<ExtensionPatchValidationResult>;
+    createExtensionPreviewVariant: (
+      input: ExtensionCreatePreviewVariantInput,
+    ) => Promise<ExtensionPreviewVariantEntry>;
   };
 }
 
