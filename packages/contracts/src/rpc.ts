@@ -11,8 +11,10 @@ import {
 } from "./filesystem.ts";
 import {
   ExtensionCreateDraftInput,
+  ExtensionPatchValidationResult,
   ExtensionRegistry,
   ExtensionRegistryError,
+  ExtensionValidateDraftInput,
 } from "./extensions.ts";
 import {
   GitActionProgressEvent,
@@ -153,6 +155,7 @@ export const WS_METHODS = {
   serverSignalProcess: "server.signalProcess",
   serverListExtensions: "server.listExtensions",
   serverCreateExtensionDraft: "server.createExtensionDraft",
+  serverValidateExtensionDraft: "server.validateExtensionDraft",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -245,6 +248,12 @@ export const WsServerListExtensionsRpc = Rpc.make(WS_METHODS.serverListExtension
 export const WsServerCreateExtensionDraftRpc = Rpc.make(WS_METHODS.serverCreateExtensionDraft, {
   payload: ExtensionCreateDraftInput,
   success: ExtensionRegistry,
+  error: ExtensionRegistryError,
+});
+
+export const WsServerValidateExtensionDraftRpc = Rpc.make(WS_METHODS.serverValidateExtensionDraft, {
+  payload: ExtensionValidateDraftInput,
+  success: ExtensionPatchValidationResult,
   error: ExtensionRegistryError,
 });
 
@@ -485,6 +494,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerSignalProcessRpc,
   WsServerListExtensionsRpc,
   WsServerCreateExtensionDraftRpc,
+  WsServerValidateExtensionDraftRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,

@@ -19,7 +19,12 @@ import type {
   VcsCreateRefResult,
 } from "./git.ts";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem.ts";
-import type { ExtensionCreateDraftInput, ExtensionRegistry } from "./extensions.ts";
+import type {
+  ExtensionCreateDraftInput,
+  ExtensionPatchValidationResult,
+  ExtensionRegistry,
+  ExtensionValidateDraftInput,
+} from "./extensions.ts";
 import type {
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
@@ -478,6 +483,9 @@ export interface LocalApi {
     signalProcess: (input: ServerSignalProcessInput) => Promise<ServerSignalProcessResult>;
     listExtensions: () => Promise<ExtensionRegistry>;
     createExtensionDraft: (input: ExtensionCreateDraftInput) => Promise<ExtensionRegistry>;
+    validateExtensionDraft: (
+      input: ExtensionValidateDraftInput,
+    ) => Promise<ExtensionPatchValidationResult>;
   };
 }
 

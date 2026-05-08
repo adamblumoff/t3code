@@ -1,6 +1,15 @@
-import { PackageIcon, PlusIcon, RefreshCwIcon, WrenchIcon } from "lucide-react";
+import {
+  CheckCircleIcon,
+  CircleAlertIcon,
+  PackageIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  ShieldCheckIcon,
+  WrenchIcon,
+} from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ExtensionRegistryEntry } from "@t3tools/contracts";
+import type { ExtensionPatchValidationResult, ExtensionRegistryEntry } from "@t3tools/contracts";
+import { useState } from "react";
 
 import { ensureLocalApi } from "../../localApi";
 import { Button } from "../ui/button";
@@ -21,28 +30,65 @@ function extensionStateLabel(entry: ExtensionRegistryEntry): string {
   }
 }
 
-function ExtensionRow({ entry }: { entry: ExtensionRegistryEntry }) {
+function ExtensionRow({
+  entry,
+  validation,
+  validating,
+  onValidate,
+}: {
+  entry: ExtensionRegistryEntry;
+  validation?: ExtensionPatchValidationResult;
+  validating?: boolean;
+  onValidate?: () => void;
+}) {
   const baseBuild = entry.manifest.generatedAgainst;
   const baseLabel = [baseBuild?.channel, baseBuild?.version, baseBuild?.gitCommit]
     .filter(Boolean)
     .join(" ");
+  const validationLabel = validation
+    ? validation.valid
+      ? "Patch applies"
+      : "Patch conflict"
+    : null;
   return (
     <SettingsRow
       title={entry.manifest.name}
-      description={entry.manifest.description ?? entry.manifest.id}
+      description={validation?.detail ?? entry.manifest.description ?? entry.manifest.id}
       status={
         <span className="inline-flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <span>{extensionStateLabel(entry)}</span>
           <span className="text-muted-foreground/50">v{entry.manifest.version}</span>
+          {validationLabel ? (
+            <span
+              className={
+                validation?.valid ? "text-success" : "text-destructive dark:text-destructive"
+              }
+            >
+              {validationLabel}
+            </span>
+          ) : null}
           {baseLabel ? (
             <span className="min-w-0 truncate text-muted-foreground/50">{baseLabel}</span>
           ) : null}
         </span>
       }
       control={
-        <code className="max-w-54 truncate rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-          {entry.manifest.id}
-        </code>
+        onValidate ? (
+          <Button size="xs" variant="outline" disabled={validating} onClick={onValidate}>
+            {validation?.valid ? (
+              <CheckCircleIcon className="size-3.5 text-success" />
+            ) : validation ? (
+              <CircleAlertIcon className="size-3.5 text-destructive" />
+            ) : (
+              <ShieldCheckIcon className="size-3.5" />
+            )}
+            {validating ? "Checking" : validation ? "Recheck" : "Validate"}
+          </Button>
+        ) : (
+          <code className="max-w-54 truncate rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+            {entry.manifest.id}
+          </code>
+        )
       }
     />
   );
@@ -50,6 +96,9 @@ function ExtensionRow({ entry }: { entry: ExtensionRegistryEntry }) {
 
 export function ExtensionsSettingsPanel() {
   const queryClient = useQueryClient();
+  const [validationByExtensionId, setValidationByExtensionId] = useState<
+    Record<string, ExtensionPatchValidationResult>
+  >({});
   const extensionsQuery = useQuery({
     queryKey: ["server", "extensions"],
     queryFn: () => ensureLocalApi().server.listExtensions(),
@@ -69,6 +118,31 @@ export function ExtensionsSettingsPanel() {
         title: "Unable to create draft",
         description:
           error instanceof Error ? error.message : "The extension draft was not created.",
+        type: "error",
+      });
+    },
+  });
+  const validateDraftMutation = useMutation({
+    mutationFn: (entry: ExtensionRegistryEntry) =>
+      ensureLocalApi().server.validateExtensionDraft({
+        extensionId: entry.manifest.id,
+      }),
+    onSuccess: (result) => {
+      setValidationByExtensionId((current) => ({
+        ...current,
+        [result.extensionId]: result,
+      }));
+      toastManager.add({
+        title: result.valid ? "Patch applies cleanly" : "Patch conflict",
+        description: result.detail,
+        type: result.valid ? "success" : "warning",
+      });
+    },
+    onError: (error) => {
+      toastManager.add({
+        title: "Unable to validate patch",
+        description:
+          error instanceof Error ? error.message : "The extension patch was not checked.",
         type: "error",
       });
     },
@@ -137,7 +211,21 @@ export function ExtensionsSettingsPanel() {
 
       <SettingsSection title="Drafts">
         {drafts.length > 0 ? (
-          drafts.map((entry) => <ExtensionRow key={entry.path} entry={entry} />)
+          drafts.map((entry) => {
+            const validation = validationByExtensionId[entry.manifest.id];
+            return (
+              <ExtensionRow
+                key={entry.path}
+                entry={entry}
+                {...(validation ? { validation } : {})}
+                validating={
+                  validateDraftMutation.isPending &&
+                  validateDraftMutation.variables?.path === entry.path
+                }
+                onValidate={() => validateDraftMutation.mutate(entry)}
+              />
+            );
+          })
         ) : (
           <Empty className="min-h-56">
             <EmptyMedia variant="icon">

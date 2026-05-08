@@ -3,9 +3,12 @@ import {
   ExtensionManifest,
   type ExtensionCreateDraftInput,
   type ExtensionKind,
+  type ExtensionPatchValidationResult,
   type ExtensionRegistry,
   type ExtensionRegistryEntry,
+  type ExtensionValidateDraftInput,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -13,6 +16,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import type { ServerConfigShape } from "./config.ts";
+import { runProcess } from "./processRunner.ts";
 
 const decodeManifest = Schema.decodeEffect(Schema.fromJsonString(ExtensionManifest));
 const DENSE_SIDEBAR_EXTENSION_ID = "t3labs.dense-sidebar";
@@ -70,6 +74,10 @@ function registryError(input: {
   });
 }
 
+function isSafeExtensionDirectoryName(extensionId: string): boolean {
+  return /^[a-z0-9][a-z0-9._-]*$/.test(extensionId) && !extensionId.includes("..");
+}
+
 function readDirectoryNames(directoryPath: string) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -96,6 +104,27 @@ function readDirectoryNames(directoryPath: string) {
       }
     }
     return directoryNames.toSorted((left, right) => left.localeCompare(right));
+  });
+}
+
+function resolveDraftPaths(
+  config: Pick<ServerConfigShape, "extensionDraftsDir">,
+  extensionId: string,
+) {
+  return Effect.gen(function* () {
+    const pathService = yield* Path.Path;
+    if (!isSafeExtensionDirectoryName(extensionId)) {
+      return yield* registryError({
+        path: config.extensionDraftsDir,
+        detail: "extension id cannot be used as a local draft directory name",
+      });
+    }
+    const draftDir = pathService.join(config.extensionDraftsDir, extensionId);
+    return {
+      draftDir,
+      manifestPath: pathService.join(draftDir, "manifest.json"),
+      patchPath: pathService.join(draftDir, "patches", "app.patch"),
+    };
   });
 }
 
@@ -259,5 +288,63 @@ export function createExtensionDraft(
         break;
     }
     return yield* listExtensions(config);
+  });
+}
+
+export function validateExtensionDraft(
+  config: Pick<ServerConfigShape, "cwd" | "extensionDraftsDir">,
+  input: ExtensionValidateDraftInput,
+): Effect.Effect<
+  ExtensionPatchValidationResult,
+  ExtensionRegistryError,
+  FileSystem.FileSystem | Path.Path
+> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const extensionId = input.extensionId;
+    const { draftDir, manifestPath, patchPath } = yield* resolveDraftPaths(config, extensionId);
+    const draftExists = yield* fs.exists(draftDir).pipe(Effect.orElseSucceed(() => false));
+    if (!draftExists) {
+      return yield* registryError({
+        path: draftDir,
+        detail: "extension draft does not exist",
+      });
+    }
+    yield* readManifest(manifestPath);
+    const patchExists = yield* fs.exists(patchPath).pipe(Effect.orElseSucceed(() => false));
+    if (!patchExists) {
+      return yield* registryError({
+        path: patchPath,
+        detail: "extension draft does not include patches/app.patch",
+      });
+    }
+
+    const result = yield* Effect.tryPromise({
+      try: () =>
+        runProcess("git", ["apply", "--check", patchPath], {
+          cwd: config.cwd,
+          allowNonZeroExit: true,
+          outputMode: "truncate",
+          maxBufferBytes: 64 * 1024,
+          timeoutMs: 15_000,
+        }),
+      catch: (cause) =>
+        registryError({
+          path: patchPath,
+          detail: "failed to run patch validation",
+          cause,
+        }),
+    });
+    const detail =
+      result.code === 0
+        ? "Patch applies cleanly."
+        : result.stderr.trim() || result.stdout.trim() || "Patch does not apply cleanly.";
+    return {
+      extensionId,
+      patchPath,
+      valid: result.code === 0,
+      detail,
+      checkedAt: DateTime.formatIso(yield* DateTime.now),
+    };
   });
 }

@@ -63,6 +63,20 @@ export const ExtensionCreateDraftInput = Schema.Struct({
 });
 export type ExtensionCreateDraftInput = typeof ExtensionCreateDraftInput.Type;
 
+export const ExtensionValidateDraftInput = Schema.Struct({
+  extensionId: ExtensionId,
+});
+export type ExtensionValidateDraftInput = typeof ExtensionValidateDraftInput.Type;
+
+export const ExtensionPatchValidationResult = Schema.Struct({
+  extensionId: ExtensionId,
+  patchPath: TrimmedNonEmptyString,
+  valid: Schema.Boolean,
+  detail: TrimmedNonEmptyString,
+  checkedAt: IsoDateTime,
+});
+export type ExtensionPatchValidationResult = typeof ExtensionPatchValidationResult.Type;
+
 export class ExtensionRegistryError extends Schema.TaggedErrorClass<ExtensionRegistryError>()(
   "ExtensionRegistryError",
   {

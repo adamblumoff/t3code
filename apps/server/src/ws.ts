@@ -53,7 +53,7 @@ import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner
 import { ServerLifecycleEvents } from "./serverLifecycleEvents.ts";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup.ts";
 import { redactServerSettingsForClient, ServerSettingsService } from "./serverSettings.ts";
-import { createExtensionDraft, listExtensions } from "./extensions.ts";
+import { createExtensionDraft, listExtensions, validateExtensionDraft } from "./extensions.ts";
 import { TerminalManager } from "./terminal/Services/Manager.ts";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries.ts";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem.ts";
@@ -884,6 +884,14 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
           observeRpcEffect(
             WS_METHODS.serverCreateExtensionDraft,
             createExtensionDraft(config, input),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
+        [WS_METHODS.serverValidateExtensionDraft]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverValidateExtensionDraft,
+            validateExtensionDraft(config, input),
             {
               "rpc.aggregate": "server",
             },
