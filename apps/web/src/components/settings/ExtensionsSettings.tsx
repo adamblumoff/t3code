@@ -2,6 +2,7 @@ import {
   CheckCircleIcon,
   CircleAlertIcon,
   EyeIcon,
+  DownloadIcon,
   PackageIcon,
   PlusIcon,
   RefreshCwIcon,
@@ -121,7 +122,17 @@ function ExtensionRow({
   );
 }
 
-function VariantRow({ variant }: { variant: ExtensionPreviewVariantEntry }) {
+function VariantRow({
+  variant,
+  installed,
+  installing,
+  onInstall,
+}: {
+  variant: ExtensionPreviewVariantEntry;
+  installed: boolean;
+  installing?: boolean;
+  onInstall: () => void;
+}) {
   return (
     <SettingsRow
       title={variant.extensionId}
@@ -137,9 +148,24 @@ function VariantRow({ variant }: { variant: ExtensionPreviewVariantEntry }) {
         </span>
       }
       control={
-        <code className="max-w-54 truncate rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-          {variant.variantId}
-        </code>
+        <span className="inline-flex items-center gap-1.5">
+          <code className="max-w-54 truncate rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+            {variant.variantId}
+          </code>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={installed || installing || variant.status !== "ready"}
+            onClick={onInstall}
+          >
+            {installed ? (
+              <CheckCircleIcon className="size-3.5 text-success" />
+            ) : (
+              <DownloadIcon className="size-3.5" />
+            )}
+            {installing ? "Installing" : installed ? "Installed" : "Install"}
+          </Button>
+        </span>
       }
     />
   );
@@ -230,10 +256,34 @@ export function ExtensionsSettingsPanel() {
       });
     },
   });
+  const installPreviewMutation = useMutation({
+    mutationFn: (variant: ExtensionPreviewVariantEntry) =>
+      ensureLocalApi().server.installExtensionPreviewVariant({
+        extensionId: variant.extensionId,
+        variantId: variant.variantId,
+      }),
+    onSuccess: (registry) => {
+      queryClient.setQueryData(["server", "extensions"], registry);
+      toastManager.add({
+        title: "Extension installed",
+        description: "The extension is installed and enabled in the local registry.",
+        type: "success",
+      });
+    },
+    onError: (error) => {
+      toastManager.add({
+        title: "Unable to install extension",
+        description:
+          error instanceof Error ? error.message : "The extension preview was not installed.",
+        type: "error",
+      });
+    },
+  });
   const registry = extensionsQuery.data;
   const installed = registry?.installed ?? [];
   const drafts = registry?.drafts ?? [];
   const variants = registry?.variants ?? [];
+  const installedExtensionIds = new Set(installed.map((entry) => entry.manifest.id));
   const latestVariantByExtensionId = new Map<string, ExtensionPreviewVariantEntry>();
   for (const variant of variants) {
     if (!latestVariantByExtensionId.has(variant.extensionId)) {
@@ -352,9 +402,21 @@ export function ExtensionsSettingsPanel() {
       {isEmpty ? null : (
         <SettingsSection title="Variants">
           {variants.length > 0 ? (
-            variants.map((variant) => (
-              <VariantRow key={`${variant.extensionId}:${variant.variantId}`} variant={variant} />
-            ))
+            variants.map((variant) => {
+              const installed = installedExtensionIds.has(variant.extensionId);
+              return (
+                <VariantRow
+                  key={`${variant.extensionId}:${variant.variantId}`}
+                  variant={variant}
+                  installed={installed}
+                  installing={
+                    installPreviewMutation.isPending &&
+                    installPreviewMutation.variables?.variantId === variant.variantId
+                  }
+                  onInstall={() => installPreviewMutation.mutate(variant)}
+                />
+              );
+            })
           ) : (
             <SettingsRow
               title="No preview variants"

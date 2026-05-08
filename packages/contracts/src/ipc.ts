@@ -22,6 +22,7 @@ import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem
 import type {
   ExtensionCreateDraftInput,
   ExtensionCreatePreviewVariantInput,
+  ExtensionInstallPreviewVariantInput,
   ExtensionPatchValidationResult,
   ExtensionPreviewVariantEntry,
   ExtensionRegistry,
@@ -491,6 +492,9 @@ export interface LocalApi {
     createExtensionPreviewVariant: (
       input: ExtensionCreatePreviewVariantInput,
     ) => Promise<ExtensionPreviewVariantEntry>;
+    installExtensionPreviewVariant: (
+      input: ExtensionInstallPreviewVariantInput,
+    ) => Promise<ExtensionRegistry>;
   };
 }
 

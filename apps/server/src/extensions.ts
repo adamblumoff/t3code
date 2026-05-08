@@ -4,6 +4,7 @@ import {
   ExtensionPreviewVariantEntry,
   type ExtensionCreateDraftInput,
   type ExtensionCreatePreviewVariantInput,
+  type ExtensionInstallPreviewVariantInput,
   type ExtensionKind,
   type ExtensionPatchValidationResult,
   type ExtensionPreviewVariantEntry as ExtensionPreviewVariantEntryType,
@@ -27,6 +28,16 @@ const decodePreviewVariant = Schema.decodeEffect(
 );
 const encodePreviewVariant = Schema.encodeEffect(
   Schema.fromJsonString(ExtensionPreviewVariantEntry),
+);
+const encodeInstallMetadata = Schema.encodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      installedAt: Schema.String,
+      sourceVariantId: Schema.String,
+      sourceVariantPath: Schema.String,
+      baseGitCommit: Schema.optional(Schema.String),
+    }),
+  ),
 );
 const DENSE_SIDEBAR_EXTENSION_ID = "t3labs.dense-sidebar";
 
@@ -156,6 +167,26 @@ function resolveDraftPaths(
   });
 }
 
+function resolveInstalledPaths(
+  config: Pick<ServerConfigShape, "extensionInstalledDir">,
+  extensionId: string,
+) {
+  return Effect.gen(function* () {
+    const pathService = yield* Path.Path;
+    if (!isSafeExtensionDirectoryName(extensionId)) {
+      return yield* registryError({
+        path: config.extensionInstalledDir,
+        detail: "extension id cannot be used as a local installed directory name",
+      });
+    }
+    const installedDir = pathService.join(config.extensionInstalledDir, extensionId);
+    return {
+      installedDir,
+      installMetadataPath: pathService.join(installedDir, "installed.json"),
+    };
+  });
+}
+
 function resolveVariantPaths(
   config: Pick<ServerConfigShape, "extensionVariantsDir">,
   input: {
@@ -276,6 +307,62 @@ function writeDraftFile(input: {
           cause,
         }),
       ),
+    );
+  });
+}
+
+function copyDraftDirectory(input: {
+  readonly fromDir: string;
+  readonly toDir: string;
+}): Effect.Effect<void, ExtensionRegistryError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const pathService = yield* Path.Path;
+    const names = yield* fs.readDirectory(input.fromDir).pipe(
+      Effect.mapError((cause) =>
+        registryError({
+          path: input.fromDir,
+          detail: "failed to read extension draft directory",
+          cause,
+        }),
+      ),
+    );
+    yield* Effect.forEach(
+      names,
+      (name) =>
+        Effect.gen(function* () {
+          const sourcePath = pathService.join(input.fromDir, name);
+          const targetPath = pathService.join(input.toDir, name);
+          const info = yield* fs.stat(sourcePath).pipe(
+            Effect.mapError((cause) =>
+              registryError({
+                path: sourcePath,
+                detail: "failed to inspect extension draft file",
+                cause,
+              }),
+            ),
+          );
+          if (info.type === "Directory") {
+            return yield* copyDraftDirectory({ fromDir: sourcePath, toDir: targetPath });
+          }
+          if (info.type !== "File") {
+            return;
+          }
+          const contents = yield* fs.readFileString(sourcePath).pipe(
+            Effect.mapError((cause) =>
+              registryError({
+                path: sourcePath,
+                detail: "failed to read extension draft file",
+                cause,
+              }),
+            ),
+          );
+          yield* writeDraftFile({
+            path: targetPath,
+            contents,
+          });
+        }),
+      { concurrency: 8 },
     );
   });
 }
@@ -458,7 +545,7 @@ export function validateExtensionDraft(
 
     const result = yield* Effect.tryPromise({
       try: () =>
-        runProcess("git", ["apply", "--check", patchPath], {
+        runProcess("git", ["-c", "core.longpaths=true", "apply", "--check", patchPath], {
           cwd: config.cwd,
           allowNonZeroExit: true,
           outputMode: "truncate",
@@ -540,12 +627,24 @@ export function createExtensionPreviewVariant(
       .pipe(Effect.catch(() => Effect.void));
     yield* Effect.tryPromise({
       try: () =>
-        runProcess("git", ["clone", "--no-hardlinks", "--local", config.cwd, sourceDir], {
-          cwd: config.cwd,
-          outputMode: "truncate",
-          maxBufferBytes: 64 * 1024,
-          timeoutMs: 60_000,
-        }),
+        runProcess(
+          "git",
+          [
+            "-c",
+            "core.longpaths=true",
+            "clone",
+            "--no-hardlinks",
+            "--local",
+            config.cwd,
+            sourceDir,
+          ],
+          {
+            cwd: config.cwd,
+            outputMode: "truncate",
+            maxBufferBytes: 64 * 1024,
+            timeoutMs: 60_000,
+          },
+        ),
       catch: (cause) =>
         registryError({
           path: sourceDir,
@@ -555,7 +654,7 @@ export function createExtensionPreviewVariant(
     });
     yield* Effect.tryPromise({
       try: () =>
-        runProcess("git", ["apply", validation.patchPath], {
+        runProcess("git", ["-c", "core.longpaths=true", "apply", validation.patchPath], {
           cwd: sourceDir,
           outputMode: "truncate",
           maxBufferBytes: 64 * 1024,
@@ -594,5 +693,78 @@ export function createExtensionPreviewVariant(
       contents: `${encoded}\n`,
     });
     return variant;
+  });
+}
+
+export function installExtensionPreviewVariant(
+  config: Pick<
+    ServerConfigShape,
+    "extensionDraftsDir" | "extensionInstalledDir" | "extensionVariantsDir"
+  >,
+  input: ExtensionInstallPreviewVariantInput,
+): Effect.Effect<ExtensionRegistry, ExtensionRegistryError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const now = yield* DateTime.now;
+    const { draftDir, manifestPath } = yield* resolveDraftPaths(config, input.extensionId);
+    const { installedDir, installMetadataPath } = yield* resolveInstalledPaths(
+      config,
+      input.extensionId,
+    );
+    const { manifestPath: variantManifestPath } = yield* resolveVariantPaths(config, input);
+
+    const draftExists = yield* fs.exists(draftDir).pipe(Effect.orElseSucceed(() => false));
+    if (!draftExists) {
+      return yield* registryError({
+        path: draftDir,
+        detail: "extension draft does not exist",
+      });
+    }
+    yield* readManifest(manifestPath);
+
+    const variant = yield* readPreviewVariant(variantManifestPath);
+    if (variant.status !== "ready") {
+      return yield* registryError({
+        path: variantManifestPath,
+        detail: "only ready preview variants can be installed",
+      });
+    }
+    if (variant.extensionId !== input.extensionId) {
+      return yield* registryError({
+        path: variantManifestPath,
+        detail: "preview variant does not belong to the requested extension",
+      });
+    }
+
+    yield* fs.remove(installedDir, { recursive: true, force: true }).pipe(
+      Effect.mapError((cause) =>
+        registryError({
+          path: installedDir,
+          detail: "failed to replace installed extension",
+          cause,
+        }),
+      ),
+    );
+    yield* copyDraftDirectory({ fromDir: draftDir, toDir: installedDir });
+    const encodedInstallMetadata = yield* encodeInstallMetadata({
+      installedAt: DateTime.formatIso(now),
+      sourceVariantId: variant.variantId,
+      sourceVariantPath: variant.path,
+      ...(variant.baseGitCommit ? { baseGitCommit: variant.baseGitCommit } : {}),
+    }).pipe(
+      Effect.mapError((cause) =>
+        registryError({
+          path: installMetadataPath,
+          detail: "failed to encode extension install metadata",
+          cause,
+        }),
+      ),
+    );
+    yield* writeDraftFile({
+      path: installMetadataPath,
+      contents: `${encodedInstallMetadata}\n`,
+    });
+
+    return yield* listExtensions(config);
   });
 }

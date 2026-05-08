@@ -56,6 +56,7 @@ import { redactServerSettingsForClient, ServerSettingsService } from "./serverSe
 import {
   createExtensionDraft,
   createExtensionPreviewVariant,
+  installExtensionPreviewVariant,
   listExtensions,
   validateExtensionDraft,
 } from "./extensions.ts";
@@ -905,6 +906,14 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
           observeRpcEffect(
             WS_METHODS.serverCreateExtensionPreviewVariant,
             createExtensionPreviewVariant(config, input),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
+        [WS_METHODS.serverInstallExtensionPreviewVariant]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverInstallExtensionPreviewVariant,
+            installExtensionPreviewVariant(config, input),
             {
               "rpc.aggregate": "server",
             },

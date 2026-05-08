@@ -99,6 +99,12 @@ export const ExtensionCreatePreviewVariantInput = Schema.Struct({
 });
 export type ExtensionCreatePreviewVariantInput = typeof ExtensionCreatePreviewVariantInput.Type;
 
+export const ExtensionInstallPreviewVariantInput = Schema.Struct({
+  extensionId: ExtensionId,
+  variantId: TrimmedNonEmptyString,
+});
+export type ExtensionInstallPreviewVariantInput = typeof ExtensionInstallPreviewVariantInput.Type;
+
 export class ExtensionRegistryError extends Schema.TaggedErrorClass<ExtensionRegistryError>()(
   "ExtensionRegistryError",
   {

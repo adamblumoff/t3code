@@ -12,6 +12,7 @@ import {
 import {
   ExtensionCreateDraftInput,
   ExtensionCreatePreviewVariantInput,
+  ExtensionInstallPreviewVariantInput,
   ExtensionPatchValidationResult,
   ExtensionPreviewVariantEntry,
   ExtensionRegistry,
@@ -159,6 +160,7 @@ export const WS_METHODS = {
   serverCreateExtensionDraft: "server.createExtensionDraft",
   serverValidateExtensionDraft: "server.validateExtensionDraft",
   serverCreateExtensionPreviewVariant: "server.createExtensionPreviewVariant",
+  serverInstallExtensionPreviewVariant: "server.installExtensionPreviewVariant",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -265,6 +267,15 @@ export const WsServerCreateExtensionPreviewVariantRpc = Rpc.make(
   {
     payload: ExtensionCreatePreviewVariantInput,
     success: ExtensionPreviewVariantEntry,
+    error: ExtensionRegistryError,
+  },
+);
+
+export const WsServerInstallExtensionPreviewVariantRpc = Rpc.make(
+  WS_METHODS.serverInstallExtensionPreviewVariant,
+  {
+    payload: ExtensionInstallPreviewVariantInput,
+    success: ExtensionRegistry,
     error: ExtensionRegistryError,
   },
 );
@@ -508,6 +519,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerCreateExtensionDraftRpc,
   WsServerValidateExtensionDraftRpc,
   WsServerCreateExtensionPreviewVariantRpc,
+  WsServerInstallExtensionPreviewVariantRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
