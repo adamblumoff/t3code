@@ -951,17 +951,42 @@ function rebuildActiveExtensionStack(
     const pathService = yield* Path.Path;
     const repositoryRoot = yield* resolvePatchBaseGitRoot(config);
     const activePaths = yield* resolveActivePaths(config);
+    const storedStack: { readonly sourceDir?: string | undefined } = yield* fs
+      .exists(activePaths.stackPath)
+      .pipe(
+        Effect.orElseSucceed(() => false),
+        Effect.flatMap((exists) =>
+          exists
+            ? fs.readFileString(activePaths.stackPath).pipe(
+                Effect.flatMap((raw) => decodeActiveStack(raw)),
+                Effect.mapError((cause) =>
+                  registryError({
+                    path: activePaths.stackPath,
+                    detail: "failed to read active extension stack metadata",
+                    cause,
+                  }),
+                ),
+              )
+            : Effect.succeed({} as { readonly sourceDir?: string | undefined }),
+        ),
+      );
     const currentSourceDir = yield* resolveGitRoot({ cwd: config.cwd }).pipe(
       Effect.orElseSucceed(() => undefined),
     );
-    const replacingRunningSource = isManagedActiveSourceDir({
+    const protectedSourceDir = isManagedActiveSourceDir({
       activeDir: activePaths.activeDir,
       sourceDir: currentSourceDir,
+    })
+      ? currentSourceDir
+      : storedStack.sourceDir;
+    const replacingRunningSource = isManagedActiveSourceDir({
+      activeDir: activePaths.activeDir,
+      sourceDir: protectedSourceDir,
     });
     const publishSourceDir = replacingRunningSource
       ? yield* resolveSlottedActiveSourceDir({
           activeDir: activePaths.activeDir,
-          currentSourceDir,
+          currentSourceDir: protectedSourceDir,
         })
       : activePaths.sourceDir;
     const buildId = `build-${DateTime.formatIso(yield* DateTime.now)
@@ -1097,7 +1122,7 @@ function rebuildActiveExtensionStack(
       Effect.andThen(
         pruneInactiveActiveSources({
           activeDir: activePaths.activeDir,
-          keepSourceDirs: [publishSourceDir, currentSourceDir],
+          keepSourceDirs: [publishSourceDir, currentSourceDir, storedStack.sourceDir],
         }),
       ),
     );
