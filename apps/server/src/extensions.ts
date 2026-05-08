@@ -272,24 +272,8 @@ function resolveActivePaths(config: Pick<ServerConfigShape, "extensionInstalledD
     const activeDir = pathService.join(pathService.dirname(config.extensionInstalledDir), "active");
     return {
       activeDir,
-      sourceDir: pathService.join(activeDir, "source"),
       stackPath: pathService.join(activeDir, "stack.json"),
     };
-  });
-}
-
-function resolveSlottedActiveSourceDir(input: {
-  readonly activeDir: string;
-  readonly currentSourceDir: string | undefined;
-}) {
-  return Effect.gen(function* () {
-    const pathService = yield* Path.Path;
-    const sourceA = pathService.join(input.activeDir, "source-a");
-    const sourceB = pathService.join(input.activeDir, "source-b");
-    if (samePath(input.currentSourceDir, sourceA)) {
-      return sourceB;
-    }
-    return sourceA;
   });
 }
 
@@ -300,22 +284,6 @@ function normalizePathForCompare(path: string): string {
 
 function samePath(left: string | undefined, right: string | undefined): boolean {
   return Boolean(left && right && normalizePathForCompare(left) === normalizePathForCompare(right));
-}
-
-function isManagedActiveSourceDir(input: {
-  readonly activeDir: string;
-  readonly sourceDir: string | undefined;
-}): boolean {
-  if (!input.sourceDir) {
-    return false;
-  }
-  const activeDir = `${normalizePathForCompare(input.activeDir)}/`;
-  const sourceDir = normalizePathForCompare(input.sourceDir);
-  return (
-    sourceDir === `${activeDir}source` ||
-    sourceDir === `${activeDir}source-a` ||
-    sourceDir === `${activeDir}source-b`
-  );
 }
 
 function resolveVariantPaths(
@@ -480,57 +448,26 @@ function prunePreviewVariants(input: {
   });
 }
 
-function pruneActiveBuildDirectories(input: {
-  readonly activeDir: string;
-  readonly keepBuildDir?: string;
-}): Effect.Effect<void, ExtensionRegistryError, FileSystem.FileSystem | Path.Path> {
+function pruneLegacyActiveSources(
+  activeDir: string,
+): Effect.Effect<void, never, FileSystem.FileSystem | Path.Path> {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const pathService = yield* Path.Path;
-    const names = yield* readDirectoryNames(input.activeDir);
+    const names = yield* readDirectoryNames(activeDir).pipe(Effect.orElseSucceed(() => []));
     yield* Effect.forEach(
       names,
       (name) => {
-        const buildDir = pathService.join(input.activeDir, name);
-        if (!name.startsWith("build-") || buildDir === input.keepBuildDir) {
-          return Effect.void;
-        }
-        return fs.remove(buildDir, { recursive: true, force: true }).pipe(
-          Effect.mapError((cause) =>
-            registryError({
-              path: buildDir,
-              detail: "failed to prune stale active extension build directory",
-              cause,
-            }),
-          ),
-        );
-      },
-      { concurrency: 4 },
-    );
-  });
-}
-
-function pruneInactiveActiveSources(input: {
-  readonly activeDir: string;
-  readonly keepSourceDirs: ReadonlyArray<string | undefined>;
-}): Effect.Effect<void, never, FileSystem.FileSystem | Path.Path> {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const pathService = yield* Path.Path;
-    const names = yield* readDirectoryNames(input.activeDir).pipe(Effect.orElseSucceed(() => []));
-    const keep = input.keepSourceDirs.filter((value): value is string => Boolean(value));
-    yield* Effect.forEach(
-      names,
-      (name) => {
-        if (name !== "source" && name !== "source-a" && name !== "source-b") {
-          return Effect.void;
-        }
-        const sourceDir = pathService.join(input.activeDir, name);
-        if (keep.some((keepDir) => samePath(sourceDir, keepDir))) {
+        if (
+          name !== "source" &&
+          name !== "source-a" &&
+          name !== "source-b" &&
+          !name.startsWith("build-")
+        ) {
           return Effect.void;
         }
         return fs
-          .remove(sourceDir, { recursive: true, force: true })
+          .remove(pathService.join(activeDir, name), { recursive: true, force: true })
           .pipe(Effect.catch(() => Effect.void));
       },
       { concurrency: 2 },
@@ -835,7 +772,7 @@ function readActiveStack(
           ),
         )
       : {};
-    const sourceDir = storedStack.sourceDir ?? activePaths.sourceDir;
+    const sourceDir = storedStack.sourceDir ?? config.cwd ?? activePaths.activeDir;
     const builtExtensionIds = (storedStack.enabledExtensionIds ?? [])
       .filter(isSafeExtensionDirectoryName)
       .toSorted((left, right) => left.localeCompare(right));
@@ -844,8 +781,7 @@ function readActiveStack(
     const stackMatchesDesired =
       desiredExtensionIds.length === builtExtensionIds.length &&
       desiredExtensionIds.every((id, index) => id === builtExtensionIds[index]);
-    const restartRequired =
-      !stackMatchesDesired || (desiredExtensionIds.length > 0 && !runningActiveSource);
+    const restartRequired = !stackMatchesDesired || !runningActiveSource;
 
     return {
       activeDir: activePaths.activeDir,
@@ -939,7 +875,68 @@ function readInstalledPatchEntries(
   });
 }
 
-function rebuildActiveExtensionStack(
+function applyPatchToWorkspace(input: {
+  readonly repositoryRoot: string;
+  readonly patchPath: string;
+  readonly extensionName: string;
+  readonly reverse?: boolean;
+  readonly check?: boolean;
+}): Effect.Effect<void, ExtensionRegistryError> {
+  const args = ["-c", "core.longpaths=true", "apply"];
+  if (input.check) {
+    args.push("--check");
+  }
+  if (input.reverse) {
+    args.push("--reverse");
+  }
+  args.push(input.patchPath);
+
+  const action = input.reverse ? "remove" : "apply";
+  const mode = input.check ? "validate" : action;
+  return Effect.tryPromise({
+    try: () =>
+      runProcess("git", args, {
+        cwd: input.repositoryRoot,
+        outputMode: "truncate",
+        maxBufferBytes: 64 * 1024,
+        timeoutMs: 15_000,
+      }),
+    catch: (cause) =>
+      registryError({
+        path: input.patchPath,
+        detail: detailWithCause(`failed to ${mode} ${input.extensionName}`, cause),
+        cause,
+      }),
+  }).pipe(Effect.asVoid);
+}
+
+function writeActiveStack(input: {
+  readonly stackPath: string;
+  readonly repositoryRoot: string;
+  readonly enabledExtensionIds: ReadonlyArray<string>;
+}): Effect.Effect<void, ExtensionRegistryError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const stack = yield* encodeActiveStack({
+      builtAt: DateTime.formatIso(yield* DateTime.now),
+      sourceDir: input.repositoryRoot,
+      enabledExtensionIds: [...input.enabledExtensionIds],
+    }).pipe(
+      Effect.mapError((cause) =>
+        registryError({
+          path: input.stackPath,
+          detail: "failed to encode active extension stack metadata",
+          cause,
+        }),
+      ),
+    );
+    yield* writeDraftFile({
+      path: input.stackPath,
+      contents: `${stack}\n`,
+    });
+  });
+}
+
+function syncLiveExtensionStack(
   config: Pick<ServerConfigShape, "cwd" | "extensionInstalledDir">,
   input: {
     readonly extensionId: string;
@@ -948,184 +945,123 @@ function rebuildActiveExtensionStack(
 ): Effect.Effect<void, ExtensionRegistryError, FileSystem.FileSystem | Path.Path> {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const pathService = yield* Path.Path;
     const repositoryRoot = yield* resolvePatchBaseGitRoot(config);
     const activePaths = yield* resolveActivePaths(config);
-    const storedStack: { readonly sourceDir?: string | undefined } = yield* fs
-      .exists(activePaths.stackPath)
-      .pipe(
-        Effect.orElseSucceed(() => false),
-        Effect.flatMap((exists) =>
-          exists
-            ? fs.readFileString(activePaths.stackPath).pipe(
-                Effect.flatMap((raw) => decodeActiveStack(raw)),
-                Effect.mapError((cause) =>
-                  registryError({
-                    path: activePaths.stackPath,
-                    detail: "failed to read active extension stack metadata",
-                    cause,
-                  }),
-                ),
-              )
-            : Effect.succeed({} as { readonly sourceDir?: string | undefined }),
-        ),
-      );
-    const currentSourceDir = yield* resolveGitRoot({ cwd: config.cwd }).pipe(
-      Effect.orElseSucceed(() => undefined),
+    const storedStack: {
+      readonly sourceDir?: string | undefined;
+      readonly enabledExtensionIds?: ReadonlyArray<string> | undefined;
+    } = yield* fs.exists(activePaths.stackPath).pipe(
+      Effect.orElseSucceed(() => false),
+      Effect.flatMap((exists) =>
+        exists
+          ? fs.readFileString(activePaths.stackPath).pipe(
+              Effect.flatMap((raw) => decodeActiveStack(raw)),
+              Effect.mapError((cause) =>
+                registryError({
+                  path: activePaths.stackPath,
+                  detail: "failed to read active extension stack metadata",
+                  cause,
+                }),
+              ),
+            )
+          : Effect.succeed(
+              {} as {
+                readonly sourceDir?: string | undefined;
+                readonly enabledExtensionIds?: ReadonlyArray<string> | undefined;
+              },
+            ),
+      ),
     );
-    const protectedSourceDir = isManagedActiveSourceDir({
-      activeDir: activePaths.activeDir,
-      sourceDir: currentSourceDir,
-    })
-      ? currentSourceDir
-      : storedStack.sourceDir;
-    const replacingRunningSource = isManagedActiveSourceDir({
-      activeDir: activePaths.activeDir,
-      sourceDir: protectedSourceDir,
-    });
-    const publishSourceDir = replacingRunningSource
-      ? yield* resolveSlottedActiveSourceDir({
-          activeDir: activePaths.activeDir,
-          currentSourceDir: protectedSourceDir,
-        })
-      : activePaths.sourceDir;
-    const buildId = `build-${DateTime.formatIso(yield* DateTime.now)
-      .replace(/[^0-9a-z]/gi, "")
-      .toLowerCase()}`;
-    const buildDir = pathService.join(activePaths.activeDir, buildId);
-    const buildSourceDir = pathService.join(buildDir, "source");
     const installedEntries = yield* readInstalledPatchEntries(config);
+    const installedById = new Map<string, (typeof installedEntries)[number]>(
+      installedEntries.map((entry) => [entry.entry.manifest.id, entry]),
+    );
+    const currentIds = (
+      storedStack.sourceDir && samePath(storedStack.sourceDir, repositoryRoot)
+        ? (storedStack.enabledExtensionIds ?? [])
+        : []
+    ).filter(isSafeExtensionDirectoryName);
+    const currentEntries: Array<(typeof installedEntries)[number]> = [];
+    for (const extensionId of currentIds) {
+      const currentEntry = installedById.get(extensionId);
+      if (!currentEntry) {
+        return yield* registryError({
+          path: activePaths.stackPath,
+          detail: `active stack references missing installed extension ${extensionId}`,
+        });
+      }
+      currentEntries.push(currentEntry);
+    }
     const enabledEntries = installedEntries.filter(({ entry }) =>
       entry.manifest.id === input.extensionId ? input.enabled : entry.state === "enabled",
     );
-    yield* pruneActiveBuildDirectories({
-      activeDir: activePaths.activeDir,
-      keepBuildDir: buildDir,
-    });
 
-    const build = Effect.gen(function* () {
-      yield* fs.makeDirectory(buildDir, { recursive: true }).pipe(
-        Effect.mapError((cause) =>
-          registryError({
-            path: buildDir,
-            detail: "failed to prepare active extension build directory",
-            cause,
-          }),
-        ),
-      );
-      yield* Effect.tryPromise({
-        try: () =>
-          runProcess(
-            "git",
-            [
-              "-c",
-              "core.longpaths=true",
-              "clone",
-              "--no-hardlinks",
-              "--local",
-              repositoryRoot,
-              buildSourceDir,
-            ],
-            {
-              cwd: repositoryRoot,
-              outputMode: "truncate",
-              maxBufferBytes: 64 * 1024,
-              timeoutMs: 60_000,
-            },
-          ),
-        catch: (cause) =>
-          registryError({
-            path: buildSourceDir,
-            detail: detailWithCause("failed to materialize active extension source", cause),
-            cause,
-          }),
+    for (const { entry, patchPath } of currentEntries.toReversed()) {
+      yield* applyPatchToWorkspace({
+        repositoryRoot,
+        patchPath,
+        extensionName: entry.manifest.name,
+        reverse: true,
+        check: true,
       });
-      yield* linkDependencyInstalls({ repositoryRoot, sourceDir: buildSourceDir });
-
-      for (const { entry, patchPath } of enabledEntries) {
-        const patchExists = yield* fs.exists(patchPath).pipe(Effect.orElseSucceed(() => false));
-        if (!patchExists) {
-          return yield* registryError({
-            path: patchPath,
-            detail: `${entry.manifest.name} does not include patches/app.patch`,
-          });
-        }
-        yield* Effect.tryPromise({
-          try: () =>
-            runProcess("git", ["-c", "core.longpaths=true", "apply", patchPath], {
-              cwd: buildSourceDir,
-              outputMode: "truncate",
-              maxBufferBytes: 64 * 1024,
-              timeoutMs: 15_000,
-            }),
-          catch: (cause) =>
-            registryError({
-              path: patchPath,
-              detail: detailWithCause(`failed to apply ${entry.manifest.name}`, cause),
-              cause,
-            }),
+    }
+    for (const { entry, patchPath } of enabledEntries) {
+      const patchExists = yield* fs.exists(patchPath).pipe(Effect.orElseSucceed(() => false));
+      if (!patchExists) {
+        return yield* registryError({
+          path: patchPath,
+          detail: `${entry.manifest.name} does not include patches/app.patch`,
         });
       }
+    }
 
-      const stack = yield* encodeActiveStack({
-        builtAt: DateTime.formatIso(yield* DateTime.now),
-        sourceDir: publishSourceDir,
+    const applyDesiredStack = Effect.gen(function* () {
+      for (const { entry, patchPath } of enabledEntries) {
+        yield* applyPatchToWorkspace({
+          repositoryRoot,
+          patchPath,
+          extensionName: entry.manifest.name,
+          check: true,
+        });
+      }
+      for (const { entry, patchPath } of enabledEntries) {
+        yield* applyPatchToWorkspace({
+          repositoryRoot,
+          patchPath,
+          extensionName: entry.manifest.name,
+        });
+      }
+      yield* writeActiveStack({
+        stackPath: activePaths.stackPath,
+        repositoryRoot,
         enabledExtensionIds: enabledEntries.map(({ entry }) => entry.manifest.id),
-      }).pipe(
-        Effect.mapError((cause) =>
-          registryError({
-            path: activePaths.stackPath,
-            detail: "failed to encode active extension stack metadata",
-            cause,
-          }),
-        ),
-      );
-      yield* fs.remove(publishSourceDir, { recursive: true, force: true }).pipe(
-        Effect.mapError((cause) =>
-          registryError({
-            path: publishSourceDir,
-            detail: "failed to replace active extension source",
-            cause,
-          }),
-        ),
-      );
-      yield* fs.rename(buildSourceDir, publishSourceDir).pipe(
-        Effect.mapError((cause) =>
-          registryError({
-            path: publishSourceDir,
-            detail: "failed to publish active extension source",
-            cause,
-          }),
-        ),
-      );
-      yield* writeDraftFile({
-        path: activePaths.stackPath,
-        contents: `${stack}\n`,
       });
+      yield* pruneLegacyActiveSources(activePaths.activeDir);
     });
 
-    yield* build.pipe(
-      Effect.catch((error) =>
-        fs.remove(buildDir, { recursive: true, force: true }).pipe(
-          Effect.catch(() => Effect.void),
-          Effect.andThen(Effect.fail(error)),
-        ),
-      ),
-      Effect.andThen(
-        fs.remove(buildDir, { recursive: true, force: true }).pipe(Effect.catch(() => Effect.void)),
-      ),
-      Effect.andThen(
-        pruneActiveBuildDirectories({ activeDir: activePaths.activeDir }).pipe(
-          Effect.catch(() => Effect.void),
-        ),
-      ),
-      Effect.andThen(
-        pruneInactiveActiveSources({
-          activeDir: activePaths.activeDir,
-          keepSourceDirs: [publishSourceDir, currentSourceDir, storedStack.sourceDir],
-        }),
-      ),
-    );
+    const restoreCurrentStack = Effect.gen(function* () {
+      for (const { entry, patchPath } of currentEntries) {
+        yield* applyPatchToWorkspace({
+          repositoryRoot,
+          patchPath,
+          extensionName: entry.manifest.name,
+        }).pipe(Effect.catch(() => Effect.void));
+      }
+    });
+
+    yield* Effect.gen(function* () {
+      for (const { entry, patchPath } of currentEntries.toReversed()) {
+        yield* applyPatchToWorkspace({
+          repositoryRoot,
+          patchPath,
+          extensionName: entry.manifest.name,
+          reverse: true,
+        });
+      }
+      yield* applyDesiredStack.pipe(
+        Effect.catch((error) => restoreCurrentStack.pipe(Effect.andThen(Effect.fail(error)))),
+      );
+    });
   });
 }
 
@@ -1468,7 +1404,7 @@ export function setExtensionEnabled(
       return yield* listExtensions(config);
     }
 
-    yield* rebuildActiveExtensionStack(config, input);
+    yield* syncLiveExtensionStack(config, input);
     yield* writeInstallMetadata({
       path: installMetadataPath,
       installedAt: metadata.installedAt ?? DateTime.formatIso(now),

@@ -2,7 +2,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 
 import * as NodeOS from "node:os";
-import { symlink } from "node:fs/promises";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -14,7 +13,6 @@ import * as Hash from "effect/Hash";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
-import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { Argument, Command, Flag } from "effect/unstable/cli";
@@ -26,38 +24,6 @@ const MAX_HASH_OFFSET = 3000;
 const MAX_PORT = 65535;
 const DESKTOP_DEV_LOOPBACK_HOST = "127.0.0.1";
 const DEV_PORT_PROBE_HOSTS = ["127.0.0.1", "0.0.0.0", "::1", "::"] as const;
-const DEPENDENCY_LINK_DIRS = [
-  "",
-  "apps/desktop",
-  "apps/marketing",
-  "apps/server",
-  "apps/web",
-  "oxlint-plugin-t3code",
-  "packages/client-runtime",
-  "packages/contracts",
-  "packages/effect-acp",
-  "packages/effect-codex-app-server",
-  "packages/shared",
-  "packages/ssh",
-  "packages/tailscale",
-  "scripts",
-] as const;
-const ACTIVE_EXTENSION_STACK_JSON = Schema.decodeEffect(
-  Schema.fromJsonString(
-    Schema.Struct({
-      sourceDir: Schema.optional(Schema.String),
-      enabledExtensionIds: Schema.optional(Schema.Array(Schema.String)),
-    }),
-  ),
-);
-const EXTENSION_INSTALL_METADATA_JSON = Schema.decodeEffect(
-  Schema.fromJsonString(
-    Schema.Struct({
-      enabled: Schema.optional(Schema.Boolean),
-    }),
-  ),
-);
-
 export const DEFAULT_T3_HOME = Effect.map(Effect.service(Path.Path), (path) =>
   path.join(NodeOS.homedir(), ".t3"),
 );
@@ -155,140 +121,6 @@ function resolveBaseDir(baseDir: string | undefined): Effect.Effect<string, neve
     }
 
     return yield* DEFAULT_T3_HOME;
-  });
-}
-
-function normalizePathForCompare(value: string): string {
-  const normalized = value.replaceAll("\\", "/").replace(/\/+$/, "");
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-
-function samePath(left: string, right: string): boolean {
-  return normalizePathForCompare(left) === normalizePathForCompare(right);
-}
-
-function resolveDevRunnerCwd(input: {
-  readonly baseDir: string;
-  readonly currentCwd: string;
-}): Effect.Effect<string, DevRunnerError, FileSystem.FileSystem | Path.Path> {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-
-    if (process.env.T3CODE_DISABLE_EXTENSION_ACTIVE_SOURCE === "1") {
-      return input.currentCwd;
-    }
-
-    const activeDir = path.join(input.baseDir, "dev", "extensions", "active");
-    const stackPath = path.join(activeDir, "stack.json");
-    const installedDir = path.join(input.baseDir, "dev", "extensions", "installed");
-    const stackExists = yield* fs.exists(stackPath).pipe(Effect.orElseSucceed(() => false));
-    if (!stackExists) {
-      return input.currentCwd;
-    }
-
-    const stack = yield* fs.readFileString(stackPath).pipe(
-      Effect.flatMap((raw) => ACTIVE_EXTENSION_STACK_JSON(raw)),
-      Effect.mapError(
-        (cause) =>
-          new DevRunnerError({
-            message: `Failed to read active extension stack at ${stackPath}.`,
-            cause,
-          }),
-      ),
-    );
-    if ((stack.enabledExtensionIds ?? []).length === 0) {
-      return input.currentCwd;
-    }
-
-    const installedNames = yield* fs
-      .readDirectory(installedDir)
-      .pipe(Effect.orElseSucceed(() => [] as string[]));
-    const enabledInstalledIds: string[] = [];
-    for (const name of installedNames) {
-      const metadataPath = path.join(installedDir, name, "installed.json");
-      const metadataExists = yield* fs.exists(metadataPath).pipe(Effect.orElseSucceed(() => false));
-      if (!metadataExists) {
-        enabledInstalledIds.push(name);
-        continue;
-      }
-      const metadata = yield* fs.readFileString(metadataPath).pipe(
-        Effect.flatMap((raw) => EXTENSION_INSTALL_METADATA_JSON(raw)),
-        Effect.orElseSucceed(() => ({ enabled: false })),
-      );
-      if (metadata.enabled !== false) {
-        enabledInstalledIds.push(name);
-      }
-    }
-    const desiredExtensionIds = enabledInstalledIds.toSorted((left, right) =>
-      left.localeCompare(right),
-    );
-    const builtExtensionIds = (stack.enabledExtensionIds ?? []).toSorted((left, right) =>
-      left.localeCompare(right),
-    );
-    const stackMatchesDesired =
-      desiredExtensionIds.length === builtExtensionIds.length &&
-      desiredExtensionIds.every((id, index) => id === builtExtensionIds[index]);
-    if (!stackMatchesDesired) {
-      return input.currentCwd;
-    }
-
-    const sourceDir = stack.sourceDir ?? path.join(activeDir, "source");
-    const sourcePackagePath = path.join(sourceDir, "package.json");
-    const sourceReady = yield* fs.exists(sourcePackagePath).pipe(Effect.orElseSucceed(() => false));
-    if (!sourceReady) {
-      return yield* new DevRunnerError({
-        message: `Extensions are enabled, but active source is missing at ${sourceDir}. Recreate the extension preview or toggle the extension again.`,
-      });
-    }
-
-    const resolvedSourceDir = path.resolve(sourceDir);
-    if (samePath(path.resolve(input.currentCwd), resolvedSourceDir)) {
-      return input.currentCwd;
-    }
-
-    return resolvedSourceDir;
-  });
-}
-
-function linkActiveSourceDependencies(input: {
-  readonly baseSourceRoot: string;
-  readonly activeSourceRoot: string;
-}): Effect.Effect<void, DevRunnerError, FileSystem.FileSystem | Path.Path> {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    yield* Effect.forEach(
-      DEPENDENCY_LINK_DIRS,
-      (relativeDir) =>
-        Effect.gen(function* () {
-          const baseDir = relativeDir
-            ? path.join(input.baseSourceRoot, relativeDir)
-            : input.baseSourceRoot;
-          const target = path.join(baseDir, "node_modules");
-          const targetExists = yield* fs.exists(target).pipe(Effect.orElseSucceed(() => false));
-          if (!targetExists) {
-            return;
-          }
-          const linkParent = relativeDir
-            ? path.join(input.activeSourceRoot, relativeDir)
-            : input.activeSourceRoot;
-          const link = path.join(linkParent, "node_modules");
-          const linkExists = yield* fs.exists(link).pipe(Effect.orElseSucceed(() => false));
-          if (linkExists) {
-            return;
-          }
-          yield* Effect.tryPromise({
-            try: () => symlink(target, link, process.platform === "win32" ? "junction" : "dir"),
-            catch: (cause) =>
-              new DevRunnerError({
-                message: `Failed to link active source dependencies at ${link}.`,
-                cause,
-              }),
-          });
-        }),
-      { concurrency: 4 },
-    );
   });
 }
 
@@ -592,28 +424,15 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       port: input.port,
       devUrl: input.devUrl,
     });
-    const runnerCwd = yield* resolveDevRunnerCwd({
-      baseDir: String(env.T3CODE_HOME),
-      currentCwd: process.cwd(),
-    });
-    if (samePath(process.cwd(), runnerCwd)) {
-      delete env.T3CODE_EXTENSION_BASE_SOURCE_ROOT;
-    } else {
-      yield* linkActiveSourceDependencies({
-        baseSourceRoot: process.cwd(),
-        activeSourceRoot: runnerCwd,
-      });
-      env.T3CODE_EXTENSION_BASE_SOURCE_ROOT = process.cwd();
-    }
+    delete env.T3CODE_EXTENSION_BASE_SOURCE_ROOT;
 
     const selectionSuffix =
       serverOffset !== offset || webOffset !== offset
         ? ` selectedOffset(server=${serverOffset},web=${webOffset})`
         : "";
-    const sourceSuffix = samePath(process.cwd(), runnerCwd) ? "" : ` cwd=${runnerCwd}`;
 
     yield* Effect.logInfo(
-      `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.T3CODE_PORT)} webPort=${String(env.PORT)} baseDir=${String(env.T3CODE_HOME)}${sourceSuffix}`,
+      `[dev-runner] mode=${input.mode} source=${source}${selectionSuffix} serverPort=${String(env.T3CODE_PORT)} webPort=${String(env.PORT)} baseDir=${String(env.T3CODE_HOME)} cwd=${process.cwd()}`,
     );
 
     if (input.dryRun) {
@@ -627,7 +446,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
         stdin: "inherit",
         stdout: "inherit",
         stderr: "inherit",
-        cwd: runnerCwd,
+        cwd: process.cwd(),
         env,
         extendEnv: false,
         // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).

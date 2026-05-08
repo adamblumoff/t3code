@@ -44,9 +44,8 @@ function extensionStateLabel(entry: ExtensionRegistryEntry): string {
 function activeStackStatusLabel(registry: ExtensionRegistry | undefined): string | undefined {
   const stack = registry?.activeStack;
   if (!stack) return undefined;
-  if (stack.restartRequired) return "Restart dev server";
-  if (stack.runningActiveSource) return "Running active source";
-  if (stack.desiredExtensionIds.length > 0) return "Active source ready";
+  if (stack.restartRequired) return "Workspace out of sync";
+  if (stack.desiredExtensionIds.length > 0) return "Live patches applied";
   return "No enabled extensions";
 }
 
@@ -383,8 +382,8 @@ export function ExtensionsSettingsPanel() {
       toastManager.add({
         title: input.enabled ? "Extension enabled" : "Extension disabled",
         description: input.enabled
-          ? "The active extension stack was rebuilt successfully."
-          : "The extension was removed from the active stack.",
+          ? "The extension patch was applied to the live workspace."
+          : "The extension patch was removed from the live workspace.",
         type: "success",
       });
     },
@@ -402,9 +401,9 @@ export function ExtensionsSettingsPanel() {
       ensureLocalApi().shell.openInEditor(sourceDir, "file-manager"),
     onError: (error) => {
       toastManager.add({
-        title: "Unable to open active source",
+        title: "Unable to open workspace",
         description:
-          error instanceof Error ? error.message : "The active source folder was not opened.",
+          error instanceof Error ? error.message : "The workspace folder was not opened.",
         type: "error",
       });
     },
@@ -464,7 +463,7 @@ export function ExtensionsSettingsPanel() {
         />
         {activeStack ? (
           <SettingsRow
-            title="Active source"
+            title="Live workspace"
             description={activeStack.sourceDir}
             status={activeStackStatusLabel(registry)}
             control={
@@ -485,11 +484,10 @@ export function ExtensionsSettingsPanel() {
       {activeStack?.restartRequired ? (
         <Alert variant="warning" className="mx-1">
           <CircleAlertIcon />
-          <AlertTitle>Restart dev server to apply</AlertTitle>
+          <AlertTitle>Extension workspace is out of sync</AlertTitle>
           <AlertDescription>
-            {activeStack.runningActiveSource
-              ? "The enabled extension set changed after this source was started."
-              : "Enabled extensions are built. Restart your usual dev command and it will run the active source automatically."}
+            Toggle the extension again to re-apply the live patch stack. If the patch no longer
+            applies cleanly, T3 will reject it before changing extension state.
           </AlertDescription>
         </Alert>
       ) : null}
