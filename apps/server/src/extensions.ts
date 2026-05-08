@@ -113,6 +113,29 @@ function detailWithCause(detail: string, cause: unknown): string {
   return `${detail}: ${singleLineMessage}`;
 }
 
+function resolveGitRoot(
+  config: Pick<ServerConfigShape, "cwd">,
+): Effect.Effect<string, ExtensionRegistryError> {
+  return Effect.gen(function* () {
+    const result = yield* Effect.tryPromise({
+      try: () =>
+        runProcess("git", ["rev-parse", "--show-toplevel"], {
+          cwd: config.cwd,
+          outputMode: "truncate",
+          maxBufferBytes: 4 * 1024,
+          timeoutMs: 10_000,
+        }),
+      catch: (cause) =>
+        registryError({
+          path: config.cwd,
+          detail: detailWithCause("failed to resolve repository root", cause),
+          cause,
+        }),
+    });
+    return result.stdout.trim();
+  });
+}
+
 function isSafeExtensionDirectoryName(extensionId: string): boolean {
   return /^[a-z0-9][a-z0-9._-]*$/.test(extensionId) && !extensionId.includes("..");
 }
@@ -542,11 +565,12 @@ export function validateExtensionDraft(
         detail: "extension draft does not include patches/app.patch",
       });
     }
+    const repositoryRoot = yield* resolveGitRoot(config);
 
     const result = yield* Effect.tryPromise({
       try: () =>
         runProcess("git", ["-c", "core.longpaths=true", "apply", "--check", patchPath], {
-          cwd: config.cwd,
+          cwd: repositoryRoot,
           allowNonZeroExit: true,
           outputMode: "truncate",
           maxBufferBytes: 64 * 1024,
@@ -585,6 +609,7 @@ export function createExtensionPreviewVariant(
     const fs = yield* FileSystem.FileSystem;
     const now = yield* DateTime.now;
     const extensionId = input.extensionId;
+    const repositoryRoot = yield* resolveGitRoot(config);
     const validation = yield* validateExtensionDraft(config, { extensionId });
     if (!validation.valid) {
       return yield* registryError({
@@ -612,7 +637,7 @@ export function createExtensionPreviewVariant(
 
     const revParseResult = yield* Effect.tryPromise(() =>
       runProcess("git", ["rev-parse", "HEAD"], {
-        cwd: config.cwd,
+        cwd: repositoryRoot,
         allowNonZeroExit: true,
         outputMode: "truncate",
         maxBufferBytes: 4 * 1024,
@@ -635,11 +660,11 @@ export function createExtensionPreviewVariant(
             "clone",
             "--no-hardlinks",
             "--local",
-            config.cwd,
+            repositoryRoot,
             sourceDir,
           ],
           {
-            cwd: config.cwd,
+            cwd: repositoryRoot,
             outputMode: "truncate",
             maxBufferBytes: 64 * 1024,
             timeoutMs: 60_000,
