@@ -57,6 +57,14 @@ const decodeCleanupSession = Schema.decodeUnknownEffect(
 
 const DAY_MS = 86_400_000;
 
+class CargoCacheReportError extends Schema.TaggedError<CargoCacheReportError>()(
+  "CargoCacheReportError",
+  {
+    operation: Schema.Literals(["resolve", "inspect", "consumer"]),
+    cause: Schema.Defect(),
+  },
+) {}
+
 const worktreeCleanupEnabled = (rules: WorktreeCleanupRules) =>
   rules.worktreeAfterDays !== null ||
   rules.worktreeOnMerge ||
@@ -521,22 +529,28 @@ export const make = Effect.gen(function* () {
         continue;
       yield* Effect.gen(function* () {
         if (!(yield* fs.exists(worktreePath))) return;
-        const realPath = yield* Effect.tryPromise(() =>
-          resolveCargoCacheWorktree(worktreePath, roots),
-        );
+        const realPath = yield* Effect.tryPromise({
+          try: () => resolveCargoCacheWorktree(worktreePath, roots),
+          catch: (cause) => new CargoCacheReportError({ operation: "resolve", cause }),
+        });
         if (realPath === null || hasTerminal(realPath)) return;
         if (yield* containsProjectRoot(realPath, [project, ...snapshot.projects])) return;
         if ((yield* fs.stat(path.join(realPath, ".git"))).type !== "File") return;
         const status = yield* git.statusDetailsLocal(realPath);
         if (!status.isRepo || status.branch !== thread.branch) return;
-        const inventory = yield* Effect.tryPromise(() => inspectCargoCaches(realPath, deadline));
+        const inventory = yield* Effect.tryPromise({
+          try: () => inspectCargoCaches(realPath, deadline),
+          catch: (cause) => new CargoCacheReportError({ operation: "inspect", cause }),
+        });
         for (const candidate of inventory) {
           if (performance.now() >= deadline) break;
           const consumer =
             candidate.reason === null &&
-            (yield* Effect.tryPromise(() =>
-              hasCargoCacheConsumer(realPath, candidate.targetPath, hostPlatform, deadline),
-            ));
+            (yield* Effect.tryPromise({
+              try: () =>
+                hasCargoCacheConsumer(realPath, candidate.targetPath, hostPlatform, deadline),
+              catch: (cause) => new CargoCacheReportError({ operation: "consumer", cause }),
+            }));
           yield* Effect.logInfo("cargo cache report candidate", {
             threadId: thread.id,
             manifestPath: candidate.manifestPath,
@@ -552,6 +566,14 @@ export const make = Effect.gen(function* () {
           });
         }
       }).pipe(
+        Effect.catchTags({
+          CargoCacheReportError: (error) =>
+            Effect.logDebug("cargo cache report inspection failed", {
+              threadId: thread.id,
+              operation: error.operation,
+              cause: error.cause,
+            }),
+        }),
         Effect.catch((error) =>
           Effect.logDebug("cargo cache report skipped worktree", { threadId: thread.id, error }),
         ),

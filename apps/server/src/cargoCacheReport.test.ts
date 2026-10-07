@@ -78,6 +78,15 @@ describe.skipIf(
   HostProcessPlatform.defaultValue() === "win32" ||
     !cargoHelp.stdout?.toString().includes("--dry-run"),
 )("Cargo cache reports", () => {
+  it("reports artifacts when the remaining time budget is fractional and below the command cap", async () => {
+    const root = await makeWorkspace("fractional_budget");
+    await build(root.manifestPath);
+    vi.spyOn(performance, "now").mockReturnValue(0.25);
+    const candidates = await inspectCargoCaches(root.root, 15_000.75);
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]!.reason).toBeNull();
+    expect(candidates[0]!.projectedBytes).toBeGreaterThan(0);
+  });
   it("distinguishes workspace members from the separate CLI workspace", async () => {
     const root = await makeWorkspace("workspace_root");
     const members = Array.from({ length: 5 }, (_, index) => `member_${index}`);

@@ -69,7 +69,8 @@ const runCargo = async (args: ReadonlyArray<string>, cwd: string, deadline: numb
   if (remaining < 5_000) throw new Error("Cargo cache sweep budget expired");
   return execFile("cargo", [...args], {
     cwd,
-    timeout: Math.min(20_000, remaining),
+    env: { ...process.env, RUSTUP_AUTO_INSTALL: "0" },
+    timeout: Math.floor(Math.min(20_000, remaining)),
     maxBuffer: MAX_OUTPUT_BYTES,
   });
 };
