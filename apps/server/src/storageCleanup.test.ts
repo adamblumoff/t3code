@@ -10,6 +10,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import {
   storageCleanupActivityAt,
+  storageCleanupCargoCacheEligible,
   storageCleanupPullRequestMerged,
   storageCleanupThreadIdle,
 } from "./storageCleanup.ts";
@@ -149,6 +150,23 @@ describe("V2 storage cleanup eligibility", () => {
   function candidateWithStatus(status: OrchestrationV2ThreadShell["status"]) {
     return { ...candidate(), status };
   }
+});
+
+describe("Cargo cache retention", () => {
+  const worktree = () => shell({ branch: "feature", worktreePath: "/worktrees/feature" });
+
+  it("requires an archived or deleted idle thread and rejects a reopened or active thread", () => {
+    const archived = { ...worktree(), archivedAt: at(-DAY_MS) };
+    expect(storageCleanupCargoCacheEligible(worktree(), NOW_MS)).toBe(false);
+    expect(storageCleanupCargoCacheEligible(archived, NOW_MS)).toBe(true);
+    expect(
+      storageCleanupCargoCacheEligible({ ...worktree(), deletedAt: at(-DAY_MS) }, NOW_MS),
+    ).toBe(true);
+    expect(
+      storageCleanupCargoCacheEligible({ ...archived, activeRunId: RunId.make("run") }, NOW_MS),
+    ).toBe(false);
+    expect(storageCleanupCargoCacheEligible({ ...archived, archivedAt: null }, NOW_MS)).toBe(false);
+  });
 });
 
 describe("merged pull request cleanup", () => {

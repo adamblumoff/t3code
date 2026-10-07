@@ -53,6 +53,7 @@ describe("storage cleanup settings", () => {
   it("keeps cleanup disabled for existing installations", () => {
     expect(decodeServerSettings({}).worktreeCleanup).toBeNull();
     expect(decodeServerSettings({}).storageCleanup).toEqual({
+      cargoCacheReport: false,
       worktreeAfterDays: null,
       worktreeOnMerge: false,
       worktreeOnDelete: false,
@@ -60,6 +61,15 @@ describe("storage cleanup settings", () => {
       browserArtifactsAfterDays: null,
       logsAfterDays: null,
     });
+  });
+
+  it("requires an explicit cache report setting", () => {
+    expect(decodeServerSettingsPatch({ storageCleanup: { cargoCacheReport: true } })).toEqual({
+      storageCleanup: { cargoCacheReport: true },
+    });
+    expect(() =>
+      decodeServerSettingsPatch({ storageCleanup: { cargoCacheReport: "prune" } }),
+    ).toThrow();
   });
 
   it("accepts eight-day retention and disabling one rule without resetting others", () => {

@@ -5,6 +5,7 @@ import {
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import type {
+  OrchestrationV2AppThread,
   OrchestrationV2ThreadShell,
   ProjectId,
   ServerSettings,
@@ -25,8 +26,14 @@ import * as Path from "effect/Path";
 import type { PlatformError } from "effect/PlatformError";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import * as ServerConfig from "./config.ts";
+import {
+  CARGO_CACHE_REPORT_BUDGET_MS,
+  hasCargoCacheConsumer,
+  inspectCargoCaches,
+} from "./cargoCacheReport.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
@@ -98,6 +105,18 @@ export function storageCleanupThreadIdle(thread: OrchestrationV2ThreadShell, now
   );
 }
 
+export function storageCleanupCargoCacheEligible(
+  thread: OrchestrationV2ThreadShell | OrchestrationV2AppThread,
+  now: number,
+): boolean {
+  if (thread.branch === null || thread.worktreePath === null) return false;
+  if (thread.deletedAt !== null)
+    return !("activeRunId" in thread) || storageCleanupThreadIdle(thread, now);
+  return (
+    thread.archivedAt !== null && "activeRunId" in thread && storageCleanupThreadIdle(thread, now)
+  );
+}
+
 /** PR metadata refreshes must not reset the inactivity clock. */
 export function storageCleanupActivityAt(thread: OrchestrationV2ThreadShell): number {
   return Math.max(
@@ -149,6 +168,7 @@ export const make = Effect.gen(function* () {
   const terminals = yield* TerminalManager.TerminalManager;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const hostPlatform = yield* HostProcessPlatform;
   const liveTerminals = new Map<string, Map<string, TerminalSummary>>();
   const noteTerminal = (terminal: TerminalSummary) => {
     const threadTerminals =
@@ -437,6 +457,113 @@ export const make = Effect.gen(function* () {
     }
   });
 
+  let cargoCacheReportOffset = 0;
+  const reportCargoCaches = Effect.fn("StorageCleanup.reportCargoCaches")(function* (
+    serverSettings: ServerSettings,
+    now: number,
+  ) {
+    if (!serverSettings.storageCleanup.cargoCacheReport) return;
+    const deadline = performance.now() + CARGO_CACHE_REPORT_BUDGET_MS;
+    const roots: Array<string> = [];
+    for (const directory of managedWorktreesDirectories(
+      serverSettings,
+      config.worktreesDir,
+      path,
+    )) {
+      const root = yield* fs.exists(directory).pipe(
+        Effect.flatMap((exists) => (exists ? fs.realPath(directory) : Effect.succeed(null))),
+        Effect.orElseSucceed(() => null),
+      );
+      if (root !== null && !isFilesystemRoot(root, path)) roots.push(root);
+    }
+    const deletedRows = yield* sql<{ payload_json: string; workspaceRoot: string }>`
+      SELECT t.payload_json, p.workspace_root AS "workspaceRoot"
+      FROM orchestration_v2_projection_threads t
+      JOIN projection_projects p ON p.project_id = t.project_id
+      WHERE t.deleted_at IS NOT NULL
+    `;
+    const deletedThreads = yield* Effect.forEach(deletedRows, (row) =>
+      decodeCleanupThread(row.payload_json).pipe(
+        Effect.map((thread) => ({ ...thread, workspaceRoot: row.workspaceRoot })),
+      ),
+    );
+    const snapshot = yield* readThreads();
+    const groups = Map.groupBy(
+      snapshot.threads.filter((thread) => thread.worktreePath !== null),
+      (thread) => path.resolve(thread.worktreePath!),
+    );
+    const deletedGroups = Map.groupBy(
+      deletedThreads.filter(
+        (thread) => thread.worktreePath !== null && !groups.has(path.resolve(thread.worktreePath)),
+      ),
+      (thread) => path.resolve(thread.worktreePath!),
+    );
+    const eligible = [
+      ...[...groups.values()].flatMap((group) =>
+        group.length === 1 && storageCleanupCargoCacheEligible(group[0]!, now) ? [group[0]!] : [],
+      ),
+      ...[...deletedGroups.values()].flatMap((group) => (group.length === 1 ? [group[0]!] : [])),
+    ];
+    if (eligible.length === 0) return;
+    const offset = cargoCacheReportOffset % eligible.length;
+    const candidates = [...eligible.slice(offset), ...eligible.slice(0, offset)].slice(0, 4);
+    cargoCacheReportOffset = (offset + candidates.length) % eligible.length;
+    for (const thread of candidates) {
+      if (performance.now() >= deadline) break;
+      if (thread.worktreePath === null || thread.branch === null) continue;
+      const worktreePath = path.resolve(thread.worktreePath);
+      const deleted = "workspaceRoot" in thread;
+      const project = deleted
+        ? { workspaceRoot: thread.workspaceRoot }
+        : snapshot.projects.find((entry) => entry.id === thread.projectId);
+      if (
+        project === undefined ||
+        !roots.some((root) => inside(root, worktreePath)) ||
+        !storageCleanupCargoCacheEligible(thread, now) ||
+        hasTerminal(worktreePath)
+      )
+        continue;
+      yield* Effect.gen(function* () {
+        if (!(yield* fs.exists(worktreePath))) return;
+        const realPath = yield* fs.realPath(worktreePath);
+        const realParent = yield* fs.realPath(path.dirname(worktreePath));
+        if (realPath !== path.join(realParent, path.basename(worktreePath))) return;
+        if (yield* containsProjectRoot(worktreePath, [project, ...snapshot.projects])) return;
+        if ((yield* fs.stat(path.join(worktreePath, ".git"))).type !== "File") return;
+        const status = yield* git.statusDetailsLocal(worktreePath);
+        if (!status.isRepo || status.branch !== thread.branch) return;
+        const inventory = yield* Effect.tryPromise(() =>
+          inspectCargoCaches(worktreePath, deadline),
+        );
+        for (const candidate of inventory) {
+          if (performance.now() >= deadline) break;
+          const consumer =
+            candidate.reason === null &&
+            (yield* Effect.tryPromise(() =>
+              hasCargoCacheConsumer(worktreePath, candidate.targetPath, hostPlatform, deadline),
+            ));
+          yield* Effect.logInfo("cargo cache report candidate", {
+            threadId: thread.id,
+            manifestPath: candidate.manifestPath,
+            targetPath: candidate.targetPath,
+            projectedBytes: candidate.projectedBytes,
+            reason:
+              candidate.reason ??
+              (hostPlatform === "win32"
+                ? "Physical cache allocation is unavailable on Windows"
+                : consumer
+                  ? "Cargo cache has a live or uncertain consumer"
+                  : null),
+          });
+        }
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.logDebug("cargo cache report skipped worktree", { threadId: thread.id, error }),
+        ),
+      );
+    }
+  });
+
   const cleanFiles = Effect.fn("StorageCleanup.cleanFiles")(function* (
     root: string,
     days: number | null,
@@ -473,6 +600,9 @@ export const make = Effect.gen(function* () {
     const serverSettings = yield* settingsService.getSettings;
     const settings = serverSettings.storageCleanup;
     const now = yield* Clock.currentTimeMillis;
+    yield* reportCargoCaches(serverSettings, now).pipe(
+      Effect.catch((error) => Effect.logWarning("cargo cache report failed", { error })),
+    );
     yield* cleanWorktrees(serverSettings, now).pipe(
       Effect.catch((error) => Effect.logWarning("worktree cleanup failed", { error })),
     );
