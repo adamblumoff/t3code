@@ -4,18 +4,55 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
-import { hasCargoCacheConsumer, inspectCargoCaches } from "./cargoCacheReport.ts";
+import {
+  createCargoCacheReportQueue,
+  hasCargoCacheConsumer,
+  inspectCargoCaches,
+  resolveCargoCacheWorktree,
+} from "./cargoCacheReport.ts";
 
 const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
 const fixtures: Array<string> = [];
 const cargoHelp = NodeChildProcess.spawnSync("cargo", ["clean", "--help"], { timeout: 20_000 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const fixture of fixtures.splice(0))
     await NodeFSP.rm(fixture, { recursive: true, force: true });
 });
+
+it("eventually reports every worktree when each pass exhausts its budget after one candidate", () => {
+  const queue = createCargoCacheReportQueue();
+  const clock = vi.spyOn(performance, "now");
+  const observed: Array<string> = [];
+  for (let pass = 0; pass < 4; pass++) {
+    clock.mockReset().mockReturnValueOnce(0).mockReturnValue(2);
+    observed.push(...queue(["a", "b", "c", "d"], 1));
+  }
+  expect(observed).toEqual(["a", "b", "c", "d"]);
+});
+
+it.skipIf(HostProcessPlatform.defaultValue() === "win32")(
+  "accepts a linked managed parent but excludes a linked worktree or unmanaged path",
+  async () => {
+    const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-cargo-path-"));
+    fixtures.push(root);
+    const managed = NodePath.join(root, "managed");
+    const worktree = NodePath.join(managed, "worktree");
+    const alias = NodePath.join(root, "alias");
+    const linkedWorktree = NodePath.join(managed, "linked-worktree");
+    await NodeFSP.mkdir(worktree, { recursive: true });
+    await NodeFSP.symlink(managed, alias);
+    await NodeFSP.symlink(worktree, linkedWorktree);
+    expect(await resolveCargoCacheWorktree(NodePath.join(alias, "worktree"), [managed])).toBe(
+      worktree,
+    );
+    expect(await resolveCargoCacheWorktree(linkedWorktree, [managed])).toBeNull();
+    expect(await resolveCargoCacheWorktree(root, [managed])).toBeNull();
+  },
+);
 
 async function makeWorkspace(name: string, parent?: string) {
   const root = parent ?? (await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-cargo-cache-")));

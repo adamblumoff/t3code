@@ -31,8 +31,10 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as ServerConfig from "./config.ts";
 import {
   CARGO_CACHE_REPORT_BUDGET_MS,
+  createCargoCacheReportQueue,
   hasCargoCacheConsumer,
   inspectCargoCaches,
+  resolveCargoCacheWorktree,
 } from "./cargoCacheReport.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
@@ -457,7 +459,7 @@ export const make = Effect.gen(function* () {
     }
   });
 
-  let cargoCacheReportOffset = 0;
+  const cargoCacheReportQueue = createCargoCacheReportQueue();
   const reportCargoCaches = Effect.fn("StorageCleanup.reportCargoCaches")(function* (
     serverSettings: ServerSettings,
     now: number,
@@ -504,12 +506,7 @@ export const make = Effect.gen(function* () {
       ),
       ...[...deletedGroups.values()].flatMap((group) => (group.length === 1 ? [group[0]!] : [])),
     ];
-    if (eligible.length === 0) return;
-    const offset = cargoCacheReportOffset % eligible.length;
-    const candidates = [...eligible.slice(offset), ...eligible.slice(0, offset)].slice(0, 4);
-    cargoCacheReportOffset = (offset + candidates.length) % eligible.length;
-    for (const thread of candidates) {
-      if (performance.now() >= deadline) break;
+    for (const thread of cargoCacheReportQueue(eligible, deadline)) {
       if (thread.worktreePath === null || thread.branch === null) continue;
       const worktreePath = path.resolve(thread.worktreePath);
       const deleted = "workspaceRoot" in thread;
@@ -518,29 +515,27 @@ export const make = Effect.gen(function* () {
         : snapshot.projects.find((entry) => entry.id === thread.projectId);
       if (
         project === undefined ||
-        !roots.some((root) => inside(root, worktreePath)) ||
         !storageCleanupCargoCacheEligible(thread, now) ||
         hasTerminal(worktreePath)
       )
         continue;
       yield* Effect.gen(function* () {
         if (!(yield* fs.exists(worktreePath))) return;
-        const realPath = yield* fs.realPath(worktreePath);
-        const realParent = yield* fs.realPath(path.dirname(worktreePath));
-        if (realPath !== path.join(realParent, path.basename(worktreePath))) return;
-        if (yield* containsProjectRoot(worktreePath, [project, ...snapshot.projects])) return;
-        if ((yield* fs.stat(path.join(worktreePath, ".git"))).type !== "File") return;
-        const status = yield* git.statusDetailsLocal(worktreePath);
-        if (!status.isRepo || status.branch !== thread.branch) return;
-        const inventory = yield* Effect.tryPromise(() =>
-          inspectCargoCaches(worktreePath, deadline),
+        const realPath = yield* Effect.tryPromise(() =>
+          resolveCargoCacheWorktree(worktreePath, roots),
         );
+        if (realPath === null || hasTerminal(realPath)) return;
+        if (yield* containsProjectRoot(realPath, [project, ...snapshot.projects])) return;
+        if ((yield* fs.stat(path.join(realPath, ".git"))).type !== "File") return;
+        const status = yield* git.statusDetailsLocal(realPath);
+        if (!status.isRepo || status.branch !== thread.branch) return;
+        const inventory = yield* Effect.tryPromise(() => inspectCargoCaches(realPath, deadline));
         for (const candidate of inventory) {
           if (performance.now() >= deadline) break;
           const consumer =
             candidate.reason === null &&
             (yield* Effect.tryPromise(() =>
-              hasCargoCacheConsumer(worktreePath, candidate.targetPath, hostPlatform, deadline),
+              hasCargoCacheConsumer(realPath, candidate.targetPath, hostPlatform, deadline),
             ));
           yield* Effect.logInfo("cargo cache report candidate", {
             threadId: thread.id,

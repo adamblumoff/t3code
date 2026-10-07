@@ -10,6 +10,20 @@ const MAX_PACKAGES = 32;
 const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 export const CARGO_CACHE_REPORT_BUDGET_MS = 120_000;
 
+export function createCargoCacheReportQueue() {
+  let offset = 0;
+  return function* <T>(eligible: ReadonlyArray<T>, deadline: number) {
+    if (eligible.length === 0) return;
+    const start = offset % eligible.length;
+    for (let attempted = 0; attempted < Math.min(4, eligible.length); attempted++) {
+      if (performance.now() >= deadline) return;
+      const index = (start + attempted) % eligible.length;
+      offset = (index + 1) % eligible.length;
+      yield eligible[index]!;
+    }
+  };
+}
+
 type CargoMetadata = {
   readonly workspace_root: string;
   readonly target_directory: string;
@@ -34,6 +48,21 @@ const inside = (root: string, candidate: string) => {
     !NodePath.isAbsolute(relative)
   );
 };
+
+export async function resolveCargoCacheWorktree(
+  worktreePath: string,
+  roots: ReadonlyArray<string>,
+): Promise<string | null> {
+  const candidate = NodePath.resolve(worktreePath);
+  const realPath = await NodeFSP.realpath(candidate);
+  const realParent = await NodeFSP.realpath(NodePath.dirname(candidate));
+  if (
+    realPath !== NodePath.join(realParent, NodePath.basename(candidate)) ||
+    !roots.some((root) => inside(root, realPath))
+  )
+    return null;
+  return realPath;
+}
 
 const runCargo = async (args: ReadonlyArray<string>, cwd: string, deadline: number) => {
   const remaining = deadline - performance.now();
