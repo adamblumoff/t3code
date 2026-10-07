@@ -5,7 +5,7 @@ import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
 
 const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
-const MAX_WORKSPACES = 4;
+const MAX_MANIFESTS = 32;
 const MAX_PACKAGES = 32;
 const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 export const CARGO_CACHE_REPORT_BUDGET_MS = 120_000;
@@ -79,7 +79,7 @@ async function workspaceManifests(worktreePath: string): Promise<ReadonlyArray<s
       await inspect(NodePath.join(worktreePath, child.name));
     }
   }
-  if (manifests.length > MAX_WORKSPACES) throw new Error("too many Cargo workspaces");
+  if (manifests.length > MAX_MANIFESTS) throw new Error("too many Cargo manifests");
   return manifests;
 }
 

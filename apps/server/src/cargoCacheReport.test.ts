@@ -10,7 +10,7 @@ import { hasCargoCacheConsumer, inspectCargoCaches } from "./cargoCacheReport.ts
 
 const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
 const fixtures: Array<string> = [];
-const cargoHelp = NodeChildProcess.spawnSync("cargo", ["clean", "--help"], { timeout: 5_000 });
+const cargoHelp = NodeChildProcess.spawnSync("cargo", ["clean", "--help"], { timeout: 20_000 });
 
 afterEach(async () => {
   for (const fixture of fixtures.splice(0))
@@ -41,6 +41,27 @@ describe.skipIf(
   HostProcessPlatform.defaultValue() === "win32" ||
     !cargoHelp.stdout?.toString().includes("--dry-run"),
 )("Cargo cache reports", () => {
+  it("distinguishes workspace members from the separate CLI workspace", async () => {
+    const root = await makeWorkspace("workspace_root");
+    const members = Array.from({ length: 5 }, (_, index) => `member_${index}`);
+    for (const member of members) await makeWorkspace(member, root.root);
+    const cli = await makeWorkspace("separate_cli", root.root);
+    await NodeFSP.appendFile(
+      root.manifestPath,
+      `\n[workspace]\nmembers = ${JSON.stringify(members)}\nexclude = ["separate_cli"]\n`,
+    );
+    await build(root.manifestPath);
+    await build(cli.manifestPath);
+    const candidates = await inspectCargoCaches(root.root);
+    const workspaces = candidates.filter((candidate) => candidate.reason === null);
+    expect(workspaces.map((candidate) => candidate.targetPath).sort()).toEqual(
+      [root.targetPath, cli.targetPath].sort(),
+    );
+    expect(
+      workspaces.find((candidate) => candidate.manifestPath === root.manifestPath)!.packages,
+    ).toHaveLength(6);
+    expect(workspaces.every((candidate) => candidate.projectedBytes > 0)).toBe(true);
+  });
   it("reports Cargo-selected package artifacts while preserving source, lockfiles, binaries and ignored data", async () => {
     const root = await makeWorkspace("root_app");
     const nested = await makeWorkspace("nested_cli", root.root);
