@@ -571,11 +571,10 @@ export const make = Effect.gen(function* () {
             Effect.logDebug("cargo cache report inspection failed", {
               threadId: thread.id,
               operation: error.operation,
-              cause: error.cause,
             }),
         }),
-        Effect.catch((error) =>
-          Effect.logDebug("cargo cache report skipped worktree", { threadId: thread.id, error }),
+        Effect.catch(() =>
+          Effect.logDebug("cargo cache report skipped worktree", { threadId: thread.id }),
         ),
       );
     }
@@ -618,7 +617,7 @@ export const make = Effect.gen(function* () {
     const settings = serverSettings.storageCleanup;
     const now = yield* Clock.currentTimeMillis;
     yield* reportCargoCaches(serverSettings, now).pipe(
-      Effect.catch((error) => Effect.logWarning("cargo cache report failed", { error })),
+      Effect.catch(() => Effect.logWarning("cargo cache report failed")),
     );
     yield* cleanWorktrees(serverSettings, now).pipe(
       Effect.catch((error) => Effect.logWarning("worktree cleanup failed", { error })),
